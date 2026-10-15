@@ -1,0 +1,11 @@
+pandas>=2.2
+numpy>=1.26
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+streamlit>=1.50
+plotly>=5.24
+anthropic>=0.40
+markdown>=3.6
+weasyprint>=62      # PDF del reporte (opcional: sin esto se genera solo el HTML)
+pytest>=8
