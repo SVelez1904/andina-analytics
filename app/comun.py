@@ -1,4 +1,8 @@
-"""Piezas compartidas del dashboard: conexión, caché, colores y formatos."""
+"""Piezas compartidas del dashboard: conexión, caché, colores y formatos.
+
+El dashboard lee de BigQuery (app/bq.py). Postgres solo se usa en tu computador para generar
+reportes; los datos se copian a BigQuery con `python -m analitica.subir_bigquery`.
+"""
 import sys
 from pathlib import Path
 
@@ -9,7 +13,9 @@ if str(RAIZ) not in sys.path:
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from analitica import db  # noqa: E402
+import bq  # noqa: E402
+
+COMO_ACTUALIZAR = "Corre `python -m analitica.subir_bigquery` en tu computador."
 
 # Colores (paleta validada para daltonismo). Una serie = azul; dos = azul y naranjo.
 AZUL, NARANJO, AGUA = "#2a78d6", "#eb6834", "#1baf7a"
@@ -38,12 +44,13 @@ def configurar(titulo):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def leer(sql, params=None):
-    return db.leer(sql, params)
+    """SELECT en BigQuery (parámetros como @nombre). Se guarda 5 minutos en caché."""
+    return bq.leer(sql, params)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def existe(objeto):
-    return db.existe(objeto)
+    return bq.existe(objeto)
 
 
 def conexion_ok():
@@ -52,8 +59,20 @@ def conexion_ok():
         leer("SELECT 1 AS ok")
         return True
     except Exception as e:
-        st.error("No me pude conectar a la base. Revisa el archivo `.env` (DB_HOST, ANALITICA_DB_USER, "
-                 f"ANALITICA_DB_PASSWORD) y que Docker esté corriendo.\n\nDetalle: `{e.__class__.__name__}`")
+        st.error("No me pude conectar a BigQuery. En Streamlit Cloud revisa Settings → Secrets "
+                 "(`gcp_project` y `[gcp_service_account]`); en tu computador, `GCP_PROJECT` en el `.env` y "
+                 "`gcloud auth application-default login`.\n\n"
+                 f"Detalle: `{e.__class__.__name__}: {str(e)[:300]}`")
+        return False
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def postgres_disponible():
+    """True solo en tu computador, con la base local corriendo (para generar reportes)."""
+    try:
+        from analitica import db
+        return bool(db.existe("analitica.reportes"))
+    except Exception:
         return False
 
 

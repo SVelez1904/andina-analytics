@@ -12,7 +12,7 @@ if str(RAIZ) not in sys.path:
 import comun as c
 
 c.configurar("Reviews")
-if not c.conexion_ok() or not c.requiere("public.vw_reviews_actual", "Ejecuta `sql/vw_reviews.sql` en andina_lab."):
+if not c.conexion_ok() or not c.requiere("public.vw_reviews_actual", c.COMO_ACTUALIZAR):
     st.stop()
 
 # -- Estado ---------------------------------------------------------------------------------------
@@ -58,15 +58,15 @@ else:
 st.subheader("Notas por categoría · últimos 3 meses")
 cat = c.leer("""
     SELECT propiedad,
-           SUM(s_limpieza)::numeric / NULLIF(SUM(c_limpieza), 0)          AS limpieza,
-           SUM(s_exactitud)::numeric / NULLIF(SUM(c_exactitud), 0)        AS exactitud,
-           SUM(s_checkin)::numeric / NULLIF(SUM(c_checkin), 0)            AS checkin,
-           SUM(s_comunicacion)::numeric / NULLIF(SUM(c_comunicacion), 0)  AS comunicacion,
-           SUM(s_ubicacion)::numeric / NULLIF(SUM(c_ubicacion), 0)        AS ubicacion,
-           SUM(s_valor)::numeric / NULLIF(SUM(c_valor), 0)                AS valor,
-           SUM(reviews)                                                   AS reviews
+           SAFE_DIVIDE(SUM(s_limpieza), SUM(c_limpieza))          AS limpieza,
+           SAFE_DIVIDE(SUM(s_exactitud), SUM(c_exactitud))        AS exactitud,
+           SAFE_DIVIDE(SUM(s_checkin), SUM(c_checkin))            AS checkin,
+           SAFE_DIVIDE(SUM(s_comunicacion), SUM(c_comunicacion))  AS comunicacion,
+           SAFE_DIVIDE(SUM(s_ubicacion), SUM(c_ubicacion))        AS ubicacion,
+           SAFE_DIVIDE(SUM(s_valor), SUM(c_valor))                AS valor,
+           SUM(reviews)                                           AS reviews
     FROM public.vw_reviews_mensual
-    WHERE mes >= date_trunc('month', CURRENT_DATE) - interval '2 months'
+    WHERE CAST(mes AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE('America/Santiago'), MONTH), INTERVAL 2 MONTH)
     GROUP BY propiedad ORDER BY propiedad""")
 if not cat.empty:
     nota = lambda t: st.column_config.ProgressColumn(t, format="%.2f", min_value=4.0, max_value=5.0)  # noqa: E731
@@ -77,7 +77,7 @@ if not cat.empty:
 
 # -- Temas con IA -------------------------------------------------------------------------------------
 st.subheader("Qué dicen los comentarios (clasificado con IA)")
-if not c.requiere("analitica.vw_pendientes_propiedad", "Ejecuta `sql/esquema_analitica.sql`."):
+if not c.requiere("analitica.vw_pendientes_propiedad", c.COMO_ACTUALIZAR):
     st.stop()
 n_temas = c.leer("SELECT COUNT(*) AS n FROM analitica.review_temas")["n"].iloc[0]
 if n_temas == 0:
@@ -87,15 +87,15 @@ if n_temas == 0:
 props = ["Todas"] + sorted(c.leer("SELECT DISTINCT propiedad FROM analitica.vw_review_temas_detalle "
                                   "WHERE propiedad IS NOT NULL")["propiedad"])
 prop = st.selectbox("Propiedad", props)
-filtro = "" if prop == "Todas" else "AND propiedad = :p"
+filtro = "" if prop == "Todas" else "AND propiedad = @p"
 params = {} if prop == "Todas" else {"p": prop}
 
 temas = c.leer(f"""
     SELECT tema,
-           COUNT(*) FILTER (WHERE sentimiento IN ('negativo', 'neutro')) AS quejas,
-           COUNT(*) FILTER (WHERE sentimiento = 'positivo')              AS elogios
+           COUNTIF(sentimiento IN ('negativo', 'neutro')) AS quejas,
+           COUNTIF(sentimiento = 'positivo')              AS elogios
     FROM analitica.vw_review_temas_detalle
-    WHERE fecha >= CURRENT_DATE - 90 {filtro}
+    WHERE CAST(fecha AS DATE) >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 90 DAY) {filtro}
     GROUP BY tema""", params)
 if not temas.empty:
     temas["Tema"] = temas["tema"].map(c.NOMBRE_TEMA).fillna(temas["tema"])

@@ -24,7 +24,11 @@ DB = {
     "sslmode": os.environ.get("DB_SSLMODE", "disable"),
 }
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# BigQuery: la app de Streamlit lee de aquí (python -m analitica.subir_bigquery copia los datos)
+GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
+BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
+
+ANTHROPIC_API_KEY =os.environ.get("ANTHROPIC_API_KEY", "")
 MODELO_REVIEWS = os.environ.get("CLAUDE_MODELO_REVIEWS", "claude-haiku-4-5-20251001")
 MODELO_REPORTE = os.environ.get("CLAUDE_MODELO_REPORTE", "claude-haiku-4-5-20251001")
 

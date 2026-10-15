@@ -189,9 +189,13 @@ cd ~/andina_analytics && source .venv/bin/activate
 python -m analitica.pronostico --guardar     # SIEMPRE después de importar reservas
 python -m analitica.reviews_ia               # si hay reviews nuevas y tienes API key
 python -m analitica.reporte                  # opcional: genera el PDF semanal
+python -m analitica.subir_bigquery           # SIEMPRE al final: copia los datos al dashboard
 ```
 
 ### Paso 3 · Mirar
+
+El dashboard lee de **BigQuery** (no de Postgres): abre la app publicada en Streamlit Cloud, o en tu
+computador:
 
 ```bash
 streamlit run app/Inicio.py
@@ -380,13 +384,50 @@ Las tablas y cifras **siempre** salen de la base, nunca de la IA.
 
 `streamlit run app/Inicio.py` → http://localhost:8501
 
+El dashboard **lee de BigQuery**. Postgres sigue siendo tu base de trabajo: ahí importa andina_lab y ahí
+escriben el pronóstico, la clasificación de reviews y el reporte. `python -m analitica.subir_bigquery`
+copia a BigQuery solo las tablas y vistas que usa el dashboard (lista `OBJETOS` en ese archivo), cada schema
+a un dataset con el mismo nombre (`public`, `analitica`). Usa el usuario `analitica_app`, así que los datos
+personales de huéspedes nunca salen de tu computador.
+
+### 8.1 Primera vez en BigQuery
+
+```bash
+gcloud auth application-default login                 # tu usuario de Google, una vez
+# en el .env: GCP_PROJECT=tu-proyecto-id
+python -m analitica.subir_bigquery --dry-run          # revisa qué se va a subir
+python -m analitica.subir_bigquery
+```
+
+Con este volumen, BigQuery queda dentro de la capa gratuita (10 GB de almacenamiento y 1 TB de consultas al
+mes; las cargas no se cobran). Igual conviene crear una alerta de presupuesto de USD 1 en Facturación.
+
+### 8.2 Publicar en Streamlit Community Cloud
+
+1. Cuenta de servicio **solo de lectura** para la app:
+   ```bash
+   P=tu-proyecto-id
+   gcloud iam service-accounts create streamlit-lector --project=$P
+   gcloud projects add-iam-policy-binding $P --member=serviceAccount:streamlit-lector@$P.iam.gserviceaccount.com --role=roles/bigquery.dataViewer
+   gcloud projects add-iam-policy-binding $P --member=serviceAccount:streamlit-lector@$P.iam.gserviceaccount.com --role=roles/bigquery.jobUser
+   gcloud iam service-accounts keys create llave-streamlit.json --iam-account=streamlit-lector@$P.iam.gserviceaccount.com
+   ```
+2. En share.streamlit.io → **Create app**: repositorio, rama `master`, *Main file path* `app/Inicio.py`.
+3. **Advanced settings → Secrets**: pega el contenido de `.streamlit/secrets.toml.example` con los valores
+   de `llave-streamlit.json`. Después **borra** el JSON de tu computador (nunca lo subas a Git).
+4. **Settings → Sharing**: deja la app visible solo para las personas que invites.
+
+La app muestra los datos de la última subida (`_cargado_en` en cada tabla). En la nube, la página **Reporte**
+solo muestra y descarga; los reportes se generan en tu computador y se suben con `subir_bigquery`
+(si generas desde el dashboard local, se suben solos).
+
 | Página | Qué muestra |
 |---|---|
 | **Inicio** | Último mes cerrado por mercado (ocupación, ADR, RevPAR con variación vs. mes anterior); propiedades en Crítico/Alerta; pronóstico de los próximos meses; noches libres de los próximos 7 días; aviso si hay controles de datos para revisar |
 | **Ocupación** | Evolución mensual por mercado; ranking de propiedades por mes; pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
 | **Reviews** | Estado y criticidad; nota general mes a mes por propiedad (línea punteada = 4,80); notas por categoría de los últimos 3 meses; temas de los comentarios (quejas vs. elogios), pendientes con citas y acciones, fortalezas |
 | **Conversión** | Embudo de Airbnb de la última captura: visibilidad (1ª página) → atractivo (búsqueda→anuncio) → cierre (anuncio→reserva), con ✅/⚠️ frente a la referencia y el cuello de botella; tendencia por propiedad; acciones registradas |
-| **Reporte** | Botón para generar el reporte de hoy, historial y descargas |
+| **Reporte** | Historial y descargas; en tu computador, además, botón para generar el reporte de hoy |
 
 Cada gráfico tiene debajo **"Ver tabla"** con los números exactos (se puede descargar a CSV desde la tabla).
 
@@ -538,6 +579,7 @@ cd ~/andina_analytics && source .venv/bin/activate
 python -m analitica.pronostico --guardar
 python -m analitica.reviews_ia
 python -m analitica.reporte
+python -m analitica.subir_bigquery
 streamlit run app/Inicio.py
 
 # Diagnóstico

@@ -16,14 +16,15 @@ if str(RAIZ) not in sys.path:
 import comun as c
 
 c.configurar("Conversión en Airbnb")
-if not c.conexion_ok() or not c.requiere("public.vw_conversion_fotos", "Ejecuta `sql/vw_scorecard.sql` en andina_lab."):
+if not c.conexion_ok() or not c.requiere("public.vw_conversion_fotos", c.COMO_ACTUALIZAR):
     st.stop()
 
 fotos = c.leer("""SELECT propiedad, periodo_desde, periodo_hasta, fecha_captura, conversion_general,
                          impresiones_primera_pagina, busqueda_a_anuncio, anuncio_a_reserva, notas
                   FROM public.vw_conversion_fotos ORDER BY periodo_hasta, propiedad""")
 if fotos.empty:
-    st.info("Aún no hay capturas de conversión. Impórtalas en andina_lab con `importar_conversion_airbnb`.")
+    st.info("Aún no hay capturas de conversión. Impórtalas en andina_lab con `importar_conversion_airbnb` "
+            "y luego corre `python -m analitica.subir_bigquery`.")
     st.stop()
 for col in ("periodo_desde", "periodo_hasta", "fecha_captura"):
     fotos[col] = pd.to_datetime(fotos[col])

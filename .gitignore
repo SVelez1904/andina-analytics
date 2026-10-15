@@ -8,3 +8,6 @@ reportes/*
 *.csv
 *.xlsx
 .pytest_cache/
+.streamlit/secrets.toml
+llave*.json
+*service-account*.json

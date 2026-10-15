@@ -15,7 +15,7 @@ if not c.conexion_ok():
     st.stop()
 
 # -- Último mes cerrado por mercado --------------------------------------------------------
-if c.requiere("public.vw_kpis_mercado_mensual", "Ejecuta `sql/vw_kpis.sql` en andina_lab."):
+if c.requiere("public.vw_kpis_mercado_mensual", c.COMO_ACTUALIZAR):
     km = c.leer("SELECT * FROM public.vw_kpis_mercado_mensual WHERE mes_cerrado ORDER BY mercado, mes")
     if km.empty:
         st.info("Aún no hay meses cerrados con datos.")
@@ -52,7 +52,7 @@ with col1:
         if not rv["criticidad"].isin(["Crítico", "Alerta"]).any():
             st.markdown("🟢 Todas las propiedades en OK.")
     else:
-        st.info("Ejecuta `sql/vw_reviews.sql` en andina_lab.")
+        st.info(c.COMO_ACTUALIZAR)
 
 # -- Pronóstico -----------------------------------------------------------------------------------
 with col2:
@@ -60,7 +60,7 @@ with col2:
     if c.existe("analitica.vw_pronostico_actual"):
         pr = c.leer("SELECT * FROM analitica.vw_pronostico_actual")
         if pr.empty:
-            st.info("Corre `python -m analitica.pronostico --guardar`.")
+            st.info("Corre `python -m analitica.pronostico --guardar` y luego `python -m analitica.subir_bigquery`.")
         else:
             fc = pd.Timestamp(pr["fecha_corte"].iloc[0])
             for (mes, mon), g in pr.groupby(["mes", "moneda"]):
@@ -92,4 +92,5 @@ if c.existe("public.vw_controles_calidad"):
 
 st.divider()
 st.caption("Para actualizar: importa en andina_lab → `python -m analitica.pronostico --guardar` → "
-           "`python -m analitica.reviews_ia` → recarga esta página (los datos se guardan en caché 5 minutos).")
+           "`python -m analitica.reviews_ia` → `python -m analitica.subir_bigquery` → recarga esta página "
+           "(los datos se guardan en caché 5 minutos).")

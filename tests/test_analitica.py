@@ -110,3 +110,33 @@ def test_tabla_md():
     t = reporte.tabla_md(df, [("A", lambda r: r["a"]), ("B", lambda r: r["b"])])
     assert t.splitlines()[0] == "| A | B |" and "x/y" in t
     assert reporte.tabla_md(pd.DataFrame(), []) == "_Sin datos._\n"
+
+
+# -- Subida a BigQuery ----------------------------------------------------------------------
+
+def test_preparar_tipos_para_bigquery():
+    import datetime as dt
+    import decimal
+
+    from analitica import subir_bigquery
+
+    df = pd.DataFrame({
+        "probabilidad": [decimal.Decimal("0.4500"), None],
+        "citas": [["muy limpio", "buena vista"], None],
+        "datos": [{"a": 1}, None],
+        "vacia": [None, None],
+        "fecha": [dt.date(2026, 10, 1), dt.date(2026, 10, 2)],
+    })
+    out = subir_bigquery.preparar(df)
+    assert out["probabilidad"].dtype == "float64" and math.isclose(out["probabilidad"].iloc[0], 0.45)
+    assert out["citas"].tolist() == [["muy limpio", "buena vista"], []]   # NULL -> lista vacía
+    assert out["datos"].iloc[0] == '{"a": 1}' and pd.isna(out["datos"].iloc[1])
+    assert str(out["vacia"].dtype) == "string"
+    assert "_cargado_en" in out.columns
+
+
+def test_objetos_sin_datos_personales():
+    from analitica import subir_bigquery
+
+    todos = {t for tablas in subir_bigquery.OBJETOS.values() for t in tablas}
+    assert not todos & {"dim_hospedes", "vw_reservas_analisis", "auth_user", "django_session"}

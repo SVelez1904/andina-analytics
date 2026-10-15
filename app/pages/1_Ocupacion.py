@@ -15,13 +15,17 @@ import streamlit as st
 import comun as c
 
 c.configurar("Ocupación y pronóstico")
-if not c.conexion_ok() or not c.requiere("public.vw_fct_noches", "Ejecuta `sql/vw_kpis.sql` en andina_lab."):
+if not c.conexion_ok() or not c.requiere("public.vw_fct_noches", c.COMO_ACTUALIZAR):
     st.stop()
 
 # Ocupación del MES COMPLETO ("on the books"): cuenta las noches ya ocurridas y las futuras que ya
 # están reservadas, sobre todas las noches del mes. El mes en curso y los futuros todavía pueden subir.
+# SQL en dialecto BigQuery. "hoy" se toma en hora de Chile.
 SQL_MES_COMPLETO = """
-WITH vendidas AS (                       -- una fila por propiedad y noche vendida (sin duplicar solapes)
+WITH params AS (
+    SELECT CURRENT_DATE('America/Santiago') AS hoy
+),
+vendidas AS (                            -- una fila por propiedad y noche vendida (sin duplicar solapes)
     SELECT id_propriedade, fecha,
            SUM(ingreso_noche_local) AS ingreso_local, SUM(ingreso_noche_clp) AS ingreso_clp
     FROM public.vw_fct_noches WHERE vendida
@@ -33,28 +37,37 @@ props AS (
     LEFT JOIN public.propiedad_fechas pf ON pf.id_propriedade = n.id_propriedade
     GROUP BY n.id_propriedade, pf.fecha_baja
 ),
-horizonte AS (                           -- hasta fin del mes de la última noche vendida (mín. 3 meses)
-    SELECT (date_trunc('month', GREATEST(MAX(fecha), CURRENT_DATE + 60)) + interval '1 month - 1 day')::date AS fin
-    FROM vendidas
+horizonte AS (                           -- hasta fin del mes de la última noche vendida (mín. 60 días)
+    SELECT LAST_DAY(GREATEST(COALESCE(MAX(v.fecha), ANY_VALUE(p.hoy)),
+                             DATE_ADD(ANY_VALUE(p.hoy), INTERVAL 60 DAY)), MONTH) AS fin
+    FROM params p LEFT JOIN vendidas v ON TRUE
 ),
-calendario AS (                          -- todas las noches del mes, de alta a baja (serie de enteros: sin líos de horario)
-    SELECT p.id_propriedade, p.moneda_local, p.alta + d AS fecha
-    FROM props p CROSS JOIN horizonte h
-    CROSS JOIN LATERAL generate_series(0, LEAST(COALESCE(p.fecha_baja - 1, h.fin), h.fin) - p.alta) AS d
+calendario AS (                          -- todas las noches, de alta a baja
+    SELECT p.id_propriedade, p.moneda_local, fecha,
+           DATE_TRUNC(fecha, MONTH) AS mes,
+           CASE WHEN DATE_TRUNC(fecha, MONTH) < DATE_TRUNC(k.hoy, MONTH) THEN 'cerrado'
+                WHEN DATE_TRUNC(fecha, MONTH) = DATE_TRUNC(k.hoy, MONTH) THEN 'en curso'
+                ELSE 'futuro' END AS estado_mes,
+           fecha >= k.hoy AS es_futura
+    FROM props p
+    CROSS JOIN horizonte h
+    CROSS JOIN params k
+    CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(
+        p.alta,
+        LEAST(COALESCE(DATE_SUB(p.fecha_baja, INTERVAL 1 DAY), h.fin), h.fin)
+    )) AS fecha
 )
-SELECT pr.nome_anuncio                                          AS propiedad,
-       CASE c.moneda_local WHEN 'BRL' THEN 'Brasil' ELSE 'Chile' END AS mercado,
-       c.moneda_local,
-       date_trunc('month', c.fecha)::date                         AS mes,
-       CASE WHEN date_trunc('month', c.fecha) < date_trunc('month', CURRENT_DATE) THEN 'cerrado'
-            WHEN date_trunc('month', c.fecha) = date_trunc('month', CURRENT_DATE) THEN 'en curso'
-            ELSE 'futuro' END                                     AS estado_mes,
-       COUNT(*)                                                   AS noches_disponibles,
-       COUNT(v.fecha)                                             AS noches_vendidas,
-       COUNT(v.fecha) FILTER (WHERE c.fecha >= CURRENT_DATE)      AS noches_futuras_vendidas,
-       COUNT(*) FILTER (WHERE c.fecha < CURRENT_DATE)             AS noches_pasadas,
-       COALESCE(SUM(v.ingreso_local), 0)                          AS ingreso_alojamiento,
-       COALESCE(SUM(v.ingreso_clp), 0)                            AS ingreso_alojamiento_clp
+SELECT pr.nome_anuncio                                                  AS propiedad,
+       CASE c.moneda_local WHEN 'BRL' THEN 'Brasil' ELSE 'Chile' END    AS mercado,
+       c.moneda_local                                                   AS moneda_local,
+       c.mes                                                            AS mes,
+       c.estado_mes                                                     AS estado_mes,
+       COUNT(*)                                                         AS noches_disponibles,
+       COUNT(v.fecha)                                                   AS noches_vendidas,
+       COUNTIF(v.fecha IS NOT NULL AND c.es_futura)                     AS noches_futuras_vendidas,
+       COUNTIF(NOT c.es_futura)                                         AS noches_pasadas,
+       COALESCE(SUM(v.ingreso_local), 0)                                AS ingreso_alojamiento,
+       COALESCE(SUM(v.ingreso_clp), 0)                                  AS ingreso_alojamiento_clp
 FROM calendario c
 JOIN public.dim_propiedades pr ON pr.id_interno = c.id_propriedade
 LEFT JOIN vendidas v ON v.id_propriedade = c.id_propriedade AND v.fecha = c.fecha
@@ -256,12 +269,14 @@ c.ver_tabla(ev.assign(mes=ev["mes"].dt.strftime("%Y-%m")),
 # -- 4. Pronóstico ---------------------------------------------------------------------------------------
 st.divider()
 st.subheader("Pronóstico")
-if not c.requiere("analitica.vw_pronostico_actual", "Ejecuta `sql/esquema_analitica.sql`."):
+if not c.requiere("analitica.vw_pronostico_actual",
+                  "Corre `python -m analitica.pronostico --guardar` y luego `python -m analitica.subir_bigquery`."):
     st.stop()
 pr = c.leer("SELECT * FROM analitica.vw_pronostico_actual ORDER BY mes")
 pr = pr[pr["propiedad"].isin(anuncios)]
 if pr.empty:
-    st.info("No hay pronóstico guardado para estos anuncios. Corre `python -m analitica.pronostico --guardar`.")
+    st.info("No hay pronóstico guardado para estos anuncios. Corre `python -m analitica.pronostico --guardar` "
+            "y luego `python -m analitica.subir_bigquery`.")
     st.stop()
 st.caption(f"Calculado el {pd.Timestamp(pr['fecha_corte'].iloc[0]):%d-%m-%Y}. Método pickup: "
            "lo ya reservado + noches libres × probabilidad histórica de venderse con esa anticipación. "
@@ -311,7 +326,7 @@ pn = c.leer("""SELECT p.nome_anuncio AS propiedad, pn.fecha, pn.reservada, pn.pr
                FROM analitica.pronostico_noches pn
                JOIN public.dim_propiedades p ON p.id_interno = pn.id_propriedade
                WHERE pn.fecha_corte = (SELECT MAX(fecha_corte) FROM analitica.pronostico_noches)
-                 AND pn.fecha < (SELECT MAX(fecha_corte) FROM analitica.pronostico_noches) + 21""")
+                 AND pn.fecha < DATE_ADD((SELECT MAX(fecha_corte) FROM analitica.pronostico_noches), INTERVAL 21 DAY)""")
 pn = pn[pn["propiedad"].isin(anuncios)]
 if not pn.empty:
     pn["fecha"] = pd.to_datetime(pn["fecha"])

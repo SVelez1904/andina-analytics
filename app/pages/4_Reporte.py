@@ -16,26 +16,43 @@ from analitica import reporte
 from analitica.config import ANTHROPIC_API_KEY, MODELO_REPORTE
 
 c.configurar("Reporte semanal")
-if not c.conexion_ok() or not c.requiere("analitica.reportes", "Ejecuta `sql/esquema_analitica.sql`."):
+if not c.conexion_ok():
     st.stop()
 
-con_ia = st.toggle("Redactar resumen y acciones con IA", value=bool(ANTHROPIC_API_KEY), disabled=not ANTHROPIC_API_KEY,
-                   help=f"Usa {MODELO_REPORTE}. Cuesta menos de 1 centavo de dólar por reporte." if ANTHROPIC_API_KEY
-                   else "Agrega ANTHROPIC_API_KEY al archivo .env para activarlo.")
-if not ANTHROPIC_API_KEY:
-    st.caption("Sin clave de API, el resumen se escribe con reglas fijas (las tablas son las mismas).")
+# Generar escribe en Postgres (analitica.reportes): solo se puede en tu computador.
+# En Streamlit Cloud la página muestra y descarga los reportes ya subidos a BigQuery.
+if c.postgres_disponible():
+    con_ia = st.toggle("Redactar resumen y acciones con IA", value=bool(ANTHROPIC_API_KEY),
+                       disabled=not ANTHROPIC_API_KEY,
+                       help=f"Usa {MODELO_REPORTE}. Cuesta menos de 1 centavo de dólar por reporte." if ANTHROPIC_API_KEY
+                       else "Agrega ANTHROPIC_API_KEY al archivo .env para activarlo.")
+    if not ANTHROPIC_API_KEY:
+        st.caption("Sin clave de API, el resumen se escribe con reglas fijas (las tablas son las mismas).")
 
-if st.button("Generar reporte de hoy", type="primary"):
-    with st.spinner("Armando el reporte..."):
-        r = reporte.generar(usar_ia=con_ia)
-    c.leer.clear()
-    extra = f" Redactado con {r['modelo']} (≈ {r['costo_usd']:.4f} USD)." if r["modelo"] else ""
-    st.success(f"Listo: {Path(r['archivo']).name}.{extra}")
+    if st.button("Generar reporte de hoy", type="primary"):
+        with st.spinner("Armando el reporte..."):
+            r = reporte.generar(usar_ia=con_ia)
+        extra = f" Redactado con {r['modelo']} (≈ {r['costo_usd']:.4f} USD)." if r["modelo"] else ""
+        st.success(f"Listo: {Path(r['archivo']).name}.{extra}")
+        with st.spinner("Subiendo el reporte a BigQuery..."):
+            from analitica import subir_bigquery
+            errores = subir_bigquery.subir(["analitica.reportes"], imprimir=lambda *_: None)
+        if errores:
+            st.warning("El reporte quedó en tu base local, pero no se pudo subir a BigQuery. "
+                       "Corre `python -m analitica.subir_bigquery --solo analitica.reportes`.")
+        c.leer.clear()
+        c.existe.clear()
+else:
+    st.caption("Los reportes se generan en tu computador (`python -m analitica.reporte`) y se suben con "
+               "`python -m analitica.subir_bigquery`. Aquí puedes verlos y descargarlos.")
+
+if not c.requiere("analitica.reportes", c.COMO_ACTUALIZAR):
+    st.stop()
 
 hist = c.leer("""SELECT id, generado, fecha_corte, titulo, modelo_ia, archivo, contenido_md
                  FROM analitica.reportes ORDER BY generado DESC LIMIT 20""")
 if hist.empty:
-    st.info("Aún no hay reportes. Genera el primero con el botón de arriba.")
+    st.info("Aún no hay reportes subidos. Genera uno en tu computador y súbelo a BigQuery.")
     st.stop()
 
 st.subheader("Reportes generados")
