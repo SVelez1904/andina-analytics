@@ -1,4 +1,12 @@
 """Ocupación, ADR y RevPAR; pronóstico y noches libres. Con filtros por fechas y anuncio."""
+import sys
+from pathlib import Path
+
+# Raíz del repo en la ruta de Python ANTES de importar comun/analitica (necesario en Streamlit Cloud)
+RAIZ = Path(__file__).resolve().parents[1] if Path(__file__).parent.name == "app" else Path(__file__).resolve().parents[2]
+if str(RAIZ) not in sys.path:
+    sys.path.insert(0, str(RAIZ))
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -66,57 +74,57 @@ hoy_mes = pd.Timestamp.today().normalize().replace(day=1)
 with st.sidebar:
     st.header("Filtros")
     meses = sorted(kp["mes"].unique())
-    
-    # Opciones formateadas para los selectores
-    meses_opciones = {m: c.nombre_mes(m) for m in meses}
     actual = next((m for m in meses if pd.Timestamp(m) == hoy_mes), meses[-1])
-    
+
     st.markdown("### Período")
-    tipo_filtro = st.radio("Modo de selección", ["Mes único", "Rango de meses"], horizontal=True, label_visibility="collapsed")
-    
+    tipo_filtro = st.radio("Modo de selección", ["Mes único", "Rango de meses"], horizontal=True,
+                           label_visibility="collapsed")
+
     if tipo_filtro == "Mes único":
         mes_seleccionado = st.selectbox(
-            "Mes", 
-            options=meses, 
-            index=meses.index(actual) if actual in meses else 0,
+            "Mes",
+            options=meses,
+            index=meses.index(actual),
             format_func=c.nombre_mes,
-            label_visibility="collapsed"
         )
-        desde, hasta = mes_seleccionado, mes_seleccionado
+        desde = hasta = mes_seleccionado
     else:
         c1, c2 = st.columns(2)
         with c1:
             desde = st.selectbox(
-                "Desde", 
-                options=meses, 
-                index=meses.index(actual) if actual in meses else 0,
-                format_func=c.nombre_mes
+                "Desde",
+                options=meses,
+                index=meses.index(actual),
+                format_func=c.nombre_mes,
             )
         with c2:
             # Asegurar que 'hasta' sea mayor o igual a 'desde'
             meses_hasta = [m for m in meses if m >= desde]
             hasta = st.selectbox(
-                "Hasta", 
-                options=meses_hasta, 
-                index=len(meses_hasta) - 1 if meses_hasta else 0,
-                format_func=c.nombre_mes
+                "Hasta",
+                options=meses_hasta,
+                index=len(meses_hasta) - 1,
+                format_func=c.nombre_mes,
             )
 
     st.markdown("---")
     anuncios = st.multiselect("Anuncios", todos, default=todos, placeholder="Elige anuncios")
     st.caption("Filtra por mes individual o un rango personalizado de fechas.")
-    if not anuncios:
-        st.warning("Elige al menos un anuncio en la barra lateral.")
-        st.stop()
 
-    f = kp[kp["propiedad"].isin(anuncios) & kp["mes"].between(desde, hasta)]
-    periodo = c.nombre_mes(desde) if desde == hasta else f"{c.nombre_mes(desde)} a {c.nombre_mes(hasta)}"
-    st.caption(f"Período: **{periodo}** · {len(anuncios)} anuncios · **mes completo**: noches ya ocurridas + noches "
-            "futuras ya reservadas, sobre todas las noches del mes.")
-    if (f["estado_mes"] != "cerrado").any():
-        futuras = int(f["noches_futuras_vendidas"].sum())
-        st.info(f"Incluye meses que aún no terminan: {futuras} de las noches vendidas son futuras (ya reservadas). "
-                "Estos números todavía pueden subir con nuevas reservas, o bajar si hay cancelaciones.", icon="📅")
+if not anuncios:
+    st.warning("Elige al menos un anuncio en la barra lateral.")
+    st.stop()
+
+f = kp[kp["propiedad"].isin(anuncios) & kp["mes"].between(desde, hasta)]
+periodo = c.nombre_mes(desde) if desde == hasta else f"{c.nombre_mes(desde)} a {c.nombre_mes(hasta)}"
+st.caption(f"Período: **{periodo}** · {len(anuncios)} anuncios · **mes completo**: noches ya ocurridas + noches "
+           "futuras ya reservadas, sobre todas las noches del mes.")
+if (f["estado_mes"] != "cerrado").any():
+    futuras = int(f["noches_futuras_vendidas"].sum())
+    st.info(f"Incluye meses que aún no terminan: {futuras} de las noches vendidas son futuras (ya reservadas). "
+            "Estos números todavía pueden subir con nuevas reservas, o bajar si hay cancelaciones.", icon="📅")
+
+
 def agregar(df, por):
     g = df.groupby(por, as_index=False).agg(vendidas=("noches_vendidas", "sum"), disponibles=("noches_disponibles", "sum"),
                                             futuras=("noches_futuras_vendidas", "sum"), pasadas=("noches_pasadas", "sum"),
