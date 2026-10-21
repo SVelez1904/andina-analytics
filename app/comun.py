@@ -3,6 +3,7 @@
 El dashboard lee de BigQuery (app/bq.py). Postgres solo se usa en tu computador para generar
 reportes; los datos se copian a BigQuery con `python -m analitica.subir_bigquery`.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -39,7 +40,33 @@ NOMBRE_TEMA = {
 
 def configurar(titulo):
     st.set_page_config(page_title=f"{titulo} · Andina Analytics", page_icon="📊", layout="wide")
+    exigir_login()
     st.title(titulo)
+
+
+def exigir_login():
+    """Solo entran cuentas de Google de los dominios en `dominios_permitidos` (Secrets).
+    Si falta la configuración, la app queda cerrada. En tu computador puedes saltarlo con SIN_LOGIN=1."""
+    if os.environ.get("SIN_LOGIN") == "1":
+        return
+    dominios = [d.lower().lstrip("@") for d in (bq._secreto("dominios_permitidos") or [])]
+    if not bq._secreto("auth") or not dominios:
+        st.error("Falta configurar el inicio de sesión: `[auth]` y `dominios_permitidos` en Secrets "
+                 "(ver README, sección 8.3).")
+        st.stop()
+    if not st.user.get("is_logged_in"):
+        st.title("Andina Analytics")
+        st.markdown("Ingresa con tu cuenta de Andina Group.")
+        st.button("Ingresar con Google", on_click=st.login, type="primary")
+        st.stop()
+    correo = (st.user.get("email") or "").lower()
+    if correo.rsplit("@", 1)[-1] not in dominios or st.user.get("email_verified") is False:
+        st.error(f"La cuenta `{correo}` no tiene acceso. Ingresa con tu correo de Andina Group.")
+        st.button("Cerrar sesión", on_click=st.logout)
+        st.stop()
+    with st.sidebar:
+        st.caption(correo)
+        st.button("Cerrar sesión", on_click=st.logout)
 
 
 @st.cache_data(ttl=300, show_spinner=False)

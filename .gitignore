@@ -11,3 +11,5 @@ reportes/*
 .streamlit/secrets.toml
 llave*.json
 *service-account*.json
+secrets*.txt*
+*.save

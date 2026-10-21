@@ -415,7 +415,24 @@ mes; las cargas no se cobran). Igual conviene crear una alerta de presupuesto de
 2. En share.streamlit.io → **Create app**: repositorio, rama `master`, *Main file path* `app/Inicio.py`.
 3. **Advanced settings → Secrets**: pega el contenido de `.streamlit/secrets.toml.example` con los valores
    de `llave-streamlit.json`. Después **borra** el JSON de tu computador (nunca lo subas a Git).
-4. **Settings → Sharing**: deja la app visible solo para las personas que invites.
+4. Configura el inicio de sesión (8.3). Con eso la app puede quedar pública en **Settings → Sharing**:
+   igual solo entran cuentas del dominio de Andina Group.
+
+### 8.3 Inicio de sesión con Google (gratis)
+
+El dashboard pide ingresar con Google (`st.login`) y solo deja pasar correos de `dominios_permitidos`.
+Si falta la configuración, la app no muestra datos.
+
+1. En Google Cloud (mismo proyecto) → **APIs y servicios → Pantalla de consentimiento de OAuth**:
+   tipo **Interno** si el proyecto pertenece a la organización de Google Workspace de Andina Group
+   (así Google ya rechaza cuentas de fuera); si no, **Externo** y publícala.
+2. **Credenciales → Crear credenciales → ID de cliente de OAuth → Aplicación web**. En *URIs de
+   redireccionamiento autorizados* agrega `https://tu-app.streamlit.app/oauth2callback` (y
+   `http://localhost:8501/oauth2callback` para probar en tu computador).
+3. En Streamlit Cloud → **Settings → Secrets**, agrega `dominios_permitidos` y la sección `[auth]` de
+   `.streamlit/secrets.toml.example` con el *client_id*, *client_secret* y un `cookie_secret` aleatorio.
+
+En tu computador puedes saltarte el login con `SIN_LOGIN=1 streamlit run app/Inicio.py`.
 
 La app muestra los datos de la última subida (`_cargado_en` en cada tabla). En la nube, la página **Reporte**
 solo muestra y descarga; los reportes se generan en tu computador y se suben con `subir_bigquery`
