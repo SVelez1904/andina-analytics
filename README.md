@@ -416,12 +416,13 @@ mes; las cargas no se cobran). Igual conviene crear una alerta de presupuesto de
 3. **Advanced settings → Secrets**: pega el contenido de `.streamlit/secrets.toml.example` con los valores
    de `llave-streamlit.json`. Después **borra** el JSON de tu computador (nunca lo subas a Git).
 4. Configura el inicio de sesión (8.3). Con eso la app puede quedar pública en **Settings → Sharing**:
-   igual solo entran cuentas del dominio de Andina Group.
+   igual solo entran los correos autorizados.
 
 ### 8.3 Inicio de sesión con Google (gratis)
 
-El dashboard pide ingresar con Google (`st.login`) y solo deja pasar correos de `dominios_permitidos`.
-Si falta la configuración, la app no muestra datos.
+El dashboard pide ingresar con Google (`st.login`, en `app/auth.py`) y solo deja pasar cuentas
+verificadas del dominio `andinagroup.cl` que estén en `[access] allowed_emails`. Si falta la
+configuración, la app no muestra datos.
 
 1. En Google Cloud (mismo proyecto) → **APIs y servicios → Pantalla de consentimiento de OAuth**:
    tipo **Interno** si el proyecto pertenece a la organización de Google Workspace de Andina Group
@@ -429,10 +430,12 @@ Si falta la configuración, la app no muestra datos.
 2. **Credenciales → Crear credenciales → ID de cliente de OAuth → Aplicación web**. En *URIs de
    redireccionamiento autorizados* agrega `https://tu-app.streamlit.app/oauth2callback` (y
    `http://localhost:8501/oauth2callback` para probar en tu computador).
-3. En Streamlit Cloud → **Settings → Secrets**, agrega `dominios_permitidos` y la sección `[auth]` de
-   `.streamlit/secrets.toml.example` con el *client_id*, *client_secret* y un `cookie_secret` aleatorio.
+3. En Streamlit Cloud → **Settings → Secrets**, agrega las secciones `[access]` y `[auth]` de
+   `.streamlit/secrets.toml.example` con los correos autorizados, el *client_id*, *client_secret* y un
+   `cookie_secret` aleatorio. Para dar o quitar acceso, edita `allowed_emails`.
 
-En tu computador puedes saltarte el login con `SIN_LOGIN=1 streamlit run app/Inicio.py`.
+Para probar en tu computador, crea `.streamlit/secrets.toml` (está en `.gitignore`) con
+`redirect_uri = "http://localhost:8501/oauth2callback"`.
 
 La app muestra los datos de la última subida (`_cargado_en` en cada tabla). En la nube, la página **Reporte**
 solo muestra y descarga; los reportes se generan en tu computador y se suben con `subir_bigquery`
