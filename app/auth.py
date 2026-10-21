@@ -9,18 +9,27 @@ DOMINIO = "andinagroup.cl"
 
 
 def _correos_permitidos():
+    """Devuelve (correos, problema). Si falta algo, correos queda vacío y problema dice qué."""
     try:
-        st.secrets["auth"]
-        return {e.strip().lower() for e in st.secrets["access"]["allowed_emails"] if e.strip()}
-    except Exception:  # sin secrets.toml, sin [auth] o sin [access]
-        return set()
+        claves = list(st.secrets.keys())
+    except Exception:
+        return set(), "no se encontraron Secrets (en tu computador: falta `.streamlit/secrets.toml`)"
+    vistas = ", ".join(f"`{k}`" for k in claves) or "ninguna"
+    if "auth" not in claves:
+        return set(), f"falta la sección `[auth]` (secciones que veo: {vistas})"
+    if "access" not in claves:
+        return set(), f"falta la sección `[access]` (secciones que veo: {vistas})"
+    try:
+        correos = {e.strip().lower() for e in st.secrets["access"]["allowed_emails"] if e.strip()}
+    except Exception as e:
+        return set(), f"`[access] allowed_emails` no se pudo leer ({e.__class__.__name__})"
+    return correos, "`[access] allowed_emails` está vacío"
 
 
 def require_login():
-    permitidos = _correos_permitidos()
+    permitidos, problema = _correos_permitidos()
     if not permitidos:
-        st.error("Falta configurar el inicio de sesión: `[auth]` y `[access] allowed_emails` en Secrets "
-                 "(ver README, sección 8.3).")
+        st.error(f"Falta configurar el inicio de sesión: {problema}. Ver README, sección 8.3.")
         st.stop()
     if not st.user.get("is_logged_in"):
         st.title("Andina Analytics")
