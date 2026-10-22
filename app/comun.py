@@ -44,6 +44,34 @@ def configurar(titulo):
     st.set_page_config(page_title=f"{titulo} · Andina Analytics", page_icon="📊", layout="wide")
     auth.require_login()
     st.title(titulo)
+    indicador_datos()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def frescura():
+    """Cuándo se subieron los datos a BigQuery y hasta qué reserva llegan. Una consulta chica (2 columnas)."""
+    df = bq.leer("""SELECT MAX(_cargado_en) AS cargado_en, CAST(MAX(fecha_reserva) AS DATE) AS ultima_reserva
+                    FROM public.vw_fct_noches""")
+    return bq.cliente().project, df.iloc[0]["cargado_en"], df.iloc[0]["ultima_reserva"]
+
+
+def indicador_datos():
+    """Línea pequeña bajo el título: hasta qué fecha llegan los datos y cuándo se subieron a BigQuery."""
+    try:
+        proyecto, cargado, ultima = frescura()
+    except Exception:          # sin conexión: conexion_ok() muestra el error
+        return
+    cargado = pd.Timestamp(cargado)
+    if pd.isna(cargado):
+        return
+    cargado = (cargado.tz_localize("UTC") if cargado.tzinfo is None else cargado).tz_convert("America/Santiago")
+    horas = (pd.Timestamp.now(tz="America/Santiago") - cargado).total_seconds() / 3600
+    aviso = " · ⚠️ conviene actualizar" if horas > 24 * 7 else ""
+    hasta = f"Datos hasta el **{pd.Timestamp(ultima):%d-%m-%Y}** (última reserva) · " if pd.notna(ultima) else ""
+    st.caption(f"🗓️ {hasta}subidos a BigQuery el {cargado:%d-%m-%Y %H:%M}{aviso}",
+               help=f"Fuente: BigQuery, proyecto `{proyecto}`. Todas las páginas leen de ahí; la fecha de subida "
+                    "es la columna `_cargado_en` que agrega `python -m analitica.subir_bigquery`. "
+                    "Se consulta cada 5 minutos.")
 
 
 @st.cache_data(ttl=300, show_spinner=False)

@@ -465,6 +465,22 @@ solo muestra y descarga; los reportes se generan en tu computador y se suben con
 | **Conversión** | Embudo de Airbnb de la última captura: visibilidad (1ª página) → atractivo (búsqueda→anuncio) → cierre (anuncio→reserva), con ✅/⚠️ frente a la referencia y el cuello de botella; tendencia por propiedad; acciones registradas |
 | **Reporte** | Historial y descargas; en tu computador, además, botón para generar el reporte de hoy |
 
+Bajo el título de cada página hay una línea pequeña con la **frescura de los datos**:
+"🗓️ Datos hasta el 13-10-2026 (última reserva) · subidos a BigQuery el 15-10-2026 15:19". Si la subida
+tiene más de 7 días, agrega "⚠️ conviene actualizar". El ícono **?** de esa línea muestra el proyecto de
+BigQuery del que se leen los datos. Es una sola consulta pequeña (2 columnas de `public.vw_fct_noches`)
+que se guarda en caché 5 minutos.
+
+**¿De dónde salen los datos?** El dashboard lee **siempre de BigQuery** (`app/bq.py`), nunca de Postgres.
+Para ver cuándo se subió cada tabla, en la consola de BigQuery:
+
+```sql
+SELECT MAX(_cargado_en) FROM `tu-proyecto-id.public.vw_fct_noches`;   -- en UTC
+```
+
+(o mira "Last modified" en los detalles de la tabla). La columna `_cargado_en` la agrega
+`python -m analitica.subir_bigquery` en cada subida.
+
 Cada gráfico tiene debajo **"Ver tabla"** con los números exactos (se puede descargar a CSV desde la tabla).
 
 ADR y RevPAR se muestran **por mercado y en su moneda** (CLP para Chile, BRL para Brasil); nunca se mezclan en un mismo eje.
