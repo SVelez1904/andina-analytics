@@ -37,6 +37,27 @@ CONFIABLE_DESDE = os.environ.get("CONFIABLE_DESDE", "2026-05-16")
 
 CARPETA_REPORTES = RAIZ / "reportes"
 
+# Meta de ingresos por alojamiento de todo el portafolio, en CLP por mes (Brasil se convierte a CLP).
+# Es el KPI de rendimiento financiero del reporte semanal y del dashboard.
+META_INGRESO_MENSUAL_CLP = float(os.environ.get("META_INGRESO_MENSUAL_CLP", "14000000"))
+
+# Orden fijo de los mercados en reportes y dashboard: Chile siempre antes que Brasil
+ORDEN_MERCADO = {"Chile": 0, "CLP": 0, "Brasil": 1, "BRL": 1}
+
+
+def clave_mercado(serie):
+    """Para sort_values(key=...): Chile (o CLP) antes que Brasil (o BRL); las demás columnas quedan igual."""
+    if serie.name in ("mercado", "moneda", "moneda_local"):
+        return serie.map(lambda v: ORDEN_MERCADO.get(v, len(ORDEN_MERCADO)))
+    return serie
+
+
+def estado_meta(cumplimiento):
+    """cumplimiento = valor / meta -> 'En meta' (>= 100 %), 'Cerca' (>= 70 %) o 'Lejos'."""
+    if cumplimiento is None or cumplimiento != cumplimiento:
+        return "Sin dato"
+    return "En meta" if cumplimiento >= 1 else "Cerca" if cumplimiento >= 0.7 else "Lejos"
+
 # Precios de referencia (USD por millón de tokens) para estimar costos; revisa la página de precios
 PRECIOS_USD_MTOK = {"claude-haiku-4-5": (1.0, 5.0), "claude-sonnet-5-5": (2.0, 10.0)}
 

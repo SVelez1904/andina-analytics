@@ -150,7 +150,7 @@ def agregar(df, por):
 
 # -- 1. Resumen del período por mercado ---------------------------------------------------------------------
 st.subheader("Resumen del período")
-mer = agregar(f, ["mercado", "moneda_local"])
+mer = c.chile_primero(agregar(f, ["mercado", "moneda_local"]), ["mercado"])
 for _, m in mer.iterrows():
     mon = m["moneda_local"]
     st.markdown(f"**{m['mercado']}**")
@@ -159,6 +159,32 @@ for _, m in mer.iterrows():
     k2.metric(f"ADR ({mon})", c.dinero(m["adr"]))
     k3.metric(f"RevPAR ({mon})", c.dinero(m["revpar"]))
     k4.metric("Noches vendidas", f"{int(m['vendidas'])} de {int(m['disponibles'])}")
+
+# -- KPI financiero: ingresos vs meta (todo el portafolio, no depende del filtro de anuncios) -----------------
+st.subheader("Ingresos vs meta")
+meta = c.META_INGRESO_MENSUAL_CLP
+im = kp[kp["mes"].between(desde, hasta)].groupby("mes", as_index=False).agg(
+    ingreso_clp=("ingreso_alojamiento_clp", "sum"))
+im["cumplimiento"] = im["ingreso_clp"] / meta
+im[["color", "estado"]] = im["cumplimiento"].map(c.estado_meta).tolist()
+tot, meta_periodo = im["ingreso_clp"].sum(), meta * len(im)
+k1, k2, k3 = st.columns(3)
+k1.metric("Ingreso del período (CLP)", c.dinero(tot))
+k2.metric(f"Meta ({len(im)} {'mes' if len(im) == 1 else 'meses'} × {meta / 1e6:.0f} M)".replace(".", ","),
+          c.dinero(meta_periodo))
+k3.metric("Cumplimiento", c.pct(tot / meta_periodo), c.estado_meta(tot / meta_periodo)[1], delta_color="off")
+if len(im) > 1:
+    fig = go.Figure(go.Bar(x=im["mes"], y=im["ingreso_clp"], marker_color=im["color"], customdata=im[["estado"]],
+                           text=im["cumplimiento"].map(c.pct), textposition="outside", cliponaxis=False,
+                           hovertemplate="%{x|%b %Y}: %{y:,.0f} CLP · %{text} de la meta (%{customdata[0]})<extra></extra>"))
+    fig.add_hline(y=meta, line_dash="dot", line_color="#52514e", line_width=1.5,
+                  annotation_text=f"meta {meta / 1e6:.0f} M", annotation_position="top left")
+    fig.update_xaxes(dtick="M1", tickformat="%b %Y")
+    fig.update_yaxes(range=[0, max(im["ingreso_clp"].max(), meta) * 1.15])
+    st.plotly_chart(c.estilo_figura(fig, alto=300, leyenda=False), width="stretch", config={"displayModeBar": False})
+st.caption(f"Meta de {c.dinero(meta, 'CLP')} al mes de ingreso por alojamiento, para **todo el portafolio** "
+           "(Brasil convertido a CLP; no cambia con el filtro de anuncios). Verde = en meta · amarillo = sobre el "
+           "70 % · rojo = lejos. Los meses en curso y futuros incluyen noches ya reservadas y pueden subir.")
 
 # -- 2. Donas por anuncio -------------------------------------------------------------------------------
 st.subheader("Ocupación por anuncio")
@@ -246,13 +272,13 @@ else:
     ev = agregar(f, ["mercado", "moneda_local", "mes"])
     if col == "ocupacion":
         fig = px.line(ev, x="mes", y=col, color="mercado", markers=True, color_discrete_map=c.COLOR_MERCADO,
-                      labels={"mercado": "Mercado"})
+                      category_orders={"mercado": c.ORDEN_MERCADOS}, labels={"mercado": "Mercado"})
         fig.update_traces(line_width=2.5, marker_size=9, hovertemplate="%{y:.0%}")
         fig.update_xaxes(dtick="M1", tickformat="%b %Y")
         st.plotly_chart(c.estilo_figura(fig, y_pct=True, leyenda=ev["mercado"].nunique() > 1), width="stretch")
     else:
         # En moneda local: un gráfico por mercado (nunca dos escalas en un mismo eje)
-        mercados = list(ev["mercado"].unique())
+        mercados = list(c.chile_primero(ev, ["mercado"])["mercado"].unique())
         for colu, mercado in zip(st.columns(len(mercados)), mercados):
             g = ev[ev["mercado"] == mercado]
             mon = g["moneda_local"].iloc[0]

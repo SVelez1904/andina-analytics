@@ -15,6 +15,7 @@ import streamlit as st  # noqa: E402
 
 import auth  # noqa: E402
 import bq  # noqa: E402
+from analitica.config import META_INGRESO_MENSUAL_CLP, clave_mercado  # noqa: E402,F401
 
 COMO_ACTUALIZAR = "Corre `python -m analitica.subir_bigquery` en tu computador."
 
@@ -25,6 +26,7 @@ SECUENCIAL = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", 
 GRIS = "#c3c2b7"
 ESTADO = {"Crítico": "🔴 Crítico", "Alerta": "🟠 Alerta", "OK": "🟢 OK", "Sin datos suficientes": "⚪ Sin datos suficientes"}
 COLOR_MERCADO = {"Chile": AZUL, "Brasil": NARANJO}
+ORDEN_MERCADOS = ["Chile", "Brasil"]   # Chile siempre primero (leyendas, columnas y listas)
 
 DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
@@ -76,6 +78,13 @@ def postgres_disponible():
         return bool(db.existe("analitica.reportes"))
     except Exception:
         return False
+
+
+def chile_primero(df, columnas):
+    """Ordena con Chile (CLP) antes que Brasil (BRL); orden estable para el resto."""
+    if df.empty:
+        return df
+    return df.sort_values(columnas, key=clave_mercado, kind="stable").reset_index(drop=True)
 
 
 def requiere(objeto, como_crearlo):

@@ -1,5 +1,5 @@
 """
-Reporte semanal del negocio: KPIs, pronóstico, noches en riesgo, reviews, conversión y controles.
+Reporte semanal del negocio: ingresos vs meta, KPIs, pronóstico, noches en riesgo, reviews, conversión y controles.
 
 Las tablas y cifras se calculan siempre desde la base (no las inventa la IA).
 Si hay ANTHROPIC_API_KEY, Claude Haiku escribe el resumen y las acciones de la semana a partir
@@ -20,7 +20,8 @@ from datetime import date
 import pandas as pd
 
 from . import db
-from .config import ANTHROPIC_API_KEY, CARPETA_REPORTES, MODELO_REPORTE, precio
+from .config import (ANTHROPIC_API_KEY, CARPETA_REPORTES, META_INGRESO_MENSUAL_CLP, MODELO_REPORTE, clave_mercado,
+                     estado_meta, precio)
 
 NOMBRE_TEMA = {
     "limpieza": "Limpieza", "ropa_de_cama": "Ropa de cama", "mantenimiento": "Mantenimiento",
@@ -75,6 +76,13 @@ def tabla_md(df, columnas):
     return "\n".join(lineas) + "\n"
 
 
+def chile_primero(df, columnas):
+    """Ordena con Chile (CLP) antes que Brasil (BRL); orden estable para el resto."""
+    if df.empty:
+        return df
+    return df.sort_values(columnas, key=clave_mercado, kind="stable").reset_index(drop=True)
+
+
 def _leer_si_existe(objeto, sql, params=None):
     if not db.existe(objeto):
         return pd.DataFrame()
@@ -91,21 +99,35 @@ def reunir(corte=None):
     corte = pd.Timestamp(corte or date.today()).date()
     d = {"corte": corte}
 
+    # Ingreso por alojamiento (CLP; Brasil convertido) de los últimos 6 meses cerrados y el mes en curso.
+    # El mes en curso cuenta también las noches futuras ya reservadas ("on the books").
+    d["ingresos"] = _leer_si_existe("public.vw_fct_noches", """
+        SELECT CAST(date_trunc('month', fecha) AS date)  AS mes,
+               COALESCE(SUM(ingreso_noche_clp), 0)       AS ingreso_clp
+        FROM public.vw_fct_noches
+        WHERE vendida
+          AND fecha >= date_trunc('month', CAST(:c AS date)) - interval '6 months'
+          AND fecha <  date_trunc('month', CAST(:c AS date)) + interval '1 month'
+        GROUP BY 1 ORDER BY 1""", {"c": corte})
+
     d["kpis_mercado"] = _leer_si_existe("public.vw_kpis_mercado_mensual", """
         SELECT * FROM public.vw_kpis_mercado_mensual
         WHERE mes >= (date_trunc('month', CAST(:c AS date)) - interval '13 months') AND mes <= :c
         ORDER BY mercado, mes""", {"c": corte})
+    d["kpis_mercado"] = chile_primero(d["kpis_mercado"], ["mercado", "mes"])
 
     d["kpis_propiedad"] = _leer_si_existe("public.vw_kpis_mensuales", """
         SELECT propiedad, mercado, moneda_local, mes, ocupacion, adr, revpar, noches_vendidas, noches_disponibles
         FROM public.vw_kpis_mensuales
         WHERE mes_cerrado AND mes = (SELECT MAX(mes) FROM public.vw_kpis_mensuales WHERE mes_cerrado AND mes <= :c)
         ORDER BY mercado, ocupacion DESC NULLS LAST""", {"c": corte})
+    d["kpis_propiedad"] = chile_primero(d["kpis_propiedad"], ["mercado"])
 
     d["pronostico"] = _leer_si_existe("analitica.vw_pronostico_actual", """
         SELECT fecha_corte, propiedad, mes, moneda, disponibles, reservadas_ya, noches_pronostico,
                ingreso_pronostico, ocupacion_ya, ocupacion_pronostico
         FROM analitica.vw_pronostico_actual ORDER BY mes, ocupacion_pronostico DESC""")
+    d["pronostico"] = chile_primero(d["pronostico"], ["mes", "moneda"])
 
     d["riesgo"] = _leer_si_existe("analitica.vw_noches_en_riesgo", """
         SELECT propiedad,
@@ -145,10 +167,24 @@ def reunir(corte=None):
 def resumen_numeros(d):
     """Versión compacta (JSON) de los datos: es lo único que ve la IA."""
     out = {"fecha_corte": str(d["corte"])}
+    im = ingresos_vs_meta(d)
+    if not im.empty:
+        def kpi(r):
+            return {"mes": nombre_mes(r["mes"]), "ingreso_clp": round(float(r["ingreso_clp"])),
+                    "cumplimiento_meta": round(float(r["cumplimiento"]), 3), "estado": r["estado"],
+                    "diferencia_clp": round(float(r["diferencia"]))}
+        cerrados = im[~im["en_curso"]]
+        out["ingresos_vs_meta"] = {"meta_mensual_clp": round(META_INGRESO_MENSUAL_CLP)}
+        if not cerrados.empty:
+            out["ingresos_vs_meta"]["ultimo_mes_cerrado"] = kpi(cerrados.iloc[-1])
+            out["ingresos_vs_meta"]["meses_cerrados_en_meta"] = (f"{int((cerrados['cumplimiento'] >= 1).sum())} "
+                                                                  f"de {len(cerrados)}")
+        if im["en_curso"].any():
+            out["ingresos_vs_meta"]["mes_en_curso_reservado_a_la_fecha"] = kpi(im[im["en_curso"]].iloc[-1])
     km = d["kpis_mercado"]
     if not km.empty:
         out["kpis_por_mercado"] = []
-        for mercado, g in km.groupby("mercado"):
+        for mercado, g in km.groupby("mercado", sort=False):
             cerrados = g[g["mes_cerrado"]].sort_values("mes")
             if cerrados.empty:
                 continue
@@ -170,7 +206,7 @@ def resumen_numeros(d):
              "ocupacion_reservada_ya": round(g["reservadas_ya"].sum() / g["disponibles"].sum(), 3),
              "ocupacion_pronosticada": round(g["noches_pronostico"].sum() / g["disponibles"].sum(), 3),
              "ingreso_pronosticado": round(float(g["ingreso_pronostico"].sum()))}
-            for (m, mon), g in pr.groupby(["mes", "moneda"])]
+            for (m, mon), g in pr.groupby(["mes", "moneda"], sort=False)]
         mes_actual = pr["mes"].min()
         bajas = pr[(pr["mes"] == mes_actual)].nsmallest(3, "ocupacion_pronostico")
         out["propiedades_con_menor_pronostico_este_mes"] = [
@@ -202,6 +238,22 @@ def resumen_numeros(d):
     return _sin_nan(out)
 
 
+def ingresos_vs_meta(d):
+    """Una fila por mes: ingreso CLP, meta, cumplimiento (ingreso / meta), diferencia y estado."""
+    im = d.get("ingresos", pd.DataFrame())
+    if im.empty:
+        return im
+    im = im.copy()
+    im["mes"] = pd.to_datetime(im["mes"])
+    im["ingreso_clp"] = pd.to_numeric(im["ingreso_clp"]).fillna(0)
+    im["meta"] = META_INGRESO_MENSUAL_CLP
+    im["cumplimiento"] = im["ingreso_clp"] / im["meta"]
+    im["diferencia"] = im["ingreso_clp"] - im["meta"]
+    im["estado"] = im["cumplimiento"].map(estado_meta)
+    im["en_curso"] = im["mes"] >= pd.Timestamp(d["corte"]).replace(day=1)
+    return im.sort_values("mes").reset_index(drop=True)
+
+
 def _sin_nan(x):
     """NaN/NaT -> None, para que el JSON sea válido."""
     if isinstance(x, dict):
@@ -225,14 +277,33 @@ Reglas estrictas:
 - Usa SOLO las cifras del JSON. No inventes números, causas ni propiedades.
 - Ocupación en porcentaje (0.756 -> 76 %). Montos con separador de miles y su moneda.
 - Si un dato falta, no lo menciones.
+- El KPI de rendimiento financiero es el ingreso mensual vs la meta (ingresos_vs_meta): la primera viñeta
+  del Resumen siempre es ese KPI (cumplimiento en % y cuánto falta o sobra en CLP).
+- Al hablar de mercados, Chile siempre va antes que Brasil.
 Formato de salida (Markdown, sin títulos de nivel 1 ni 2):
-**Resumen** — 3 a 5 viñetas con lo más importante (desempeño del último mes cerrado, pronóstico, riesgos).
+**Resumen** — 3 a 5 viñetas con lo más importante (KPI financiero, desempeño del último mes cerrado, pronóstico, riesgos).
 **Acciones de la semana** — 3 a 6 viñetas numeradas, concretas, ordenadas por impacto, cada una con la
 propiedad y el porqué (ej. noches libres próximas, review crítica, cuello de botella de conversión)."""
 
 
 def texto_por_reglas(n):
     res, acc = [], []
+    im = n.get("ingresos_vs_meta", {})
+    meta = im.get("meta_mensual_clp")
+    if "ultimo_mes_cerrado" in im:
+        k = im["ultimo_mes_cerrado"]
+        res.append(f"- **KPI financiero**, {k['mes']}: ingreso {dinero(k['ingreso_clp'], 'CLP')} = "
+                   f"{k['cumplimiento_meta']:.0%} de la meta de {dinero(meta, 'CLP')} (**{k['estado']}**, "
+                   f"{'sobran' if k['diferencia_clp'] >= 0 else 'faltaron'} {dinero(abs(k['diferencia_clp']), 'CLP')}). "
+                   f"Meses en meta: {im.get('meses_cerrados_en_meta', '—')}.")
+    if "mes_en_curso_reservado_a_la_fecha" in im:
+        k = im["mes_en_curso_reservado_a_la_fecha"]
+        res.append(f"- {k['mes'].capitalize()} (en curso): {dinero(k['ingreso_clp'], 'CLP')} ya reservados, "
+                   f"{k['cumplimiento_meta']:.0%} de la meta"
+                   + (f"; faltan {dinero(-k['diferencia_clp'], 'CLP')}." if k["diferencia_clp"] < 0 else "; meta cubierta."))
+        if k["diferencia_clp"] < 0:
+            acc.append(f"Faltan {dinero(-k['diferencia_clp'], 'CLP')} para la meta de {k['mes']}: priorizar las "
+                       f"noches libres de las próximas semanas.")
     for k in n.get("kpis_por_mercado", []):
         var = ""
         if k.get("revpar_mes_anterior"):
@@ -286,10 +357,38 @@ def armar_markdown(d, texto):
     corte = d["corte"]
     md = [f"# Reporte semanal · {corte:%d-%m-%Y}\n", texto]
 
-    md.append("\n## 1. Desempeño del último mes cerrado\n")
+    md.append("\n## 1. Rendimiento financiero: ingresos vs meta\n")
+    im = ingresos_vs_meta(d)
+    md.append(f"Meta: **{dinero(META_INGRESO_MENSUAL_CLP, 'CLP')} al mes** de ingreso por alojamiento "
+              f"(todo el portafolio; Brasil convertido a CLP).\n\n")
+    if im.empty:
+        md.append("_Sin datos de ingresos._\n")
+    else:
+        cerrados, curso = im[~im["en_curso"]], im[im["en_curso"]]
+        if not cerrados.empty:
+            r = cerrados.iloc[-1]
+            md.append(f"- **{nombre_mes(r['mes']).capitalize()}** (último mes cerrado): {dinero(r['ingreso_clp'], 'CLP')} "
+                      f"→ **{pct(r['cumplimiento'])} de la meta** · {r['estado']}. "
+                      f"Meses en meta: {int((cerrados['cumplimiento'] >= 1).sum())} de {len(cerrados)}.\n")
+        if not curso.empty:
+            r = curso.iloc[-1]
+            md.append(f"- **{nombre_mes(r['mes']).capitalize()}** (en curso, reservado a la fecha): "
+                      f"{dinero(r['ingreso_clp'], 'CLP')} → **{pct(r['cumplimiento'])} de la meta**"
+                      + (f" · faltan {dinero(-r['diferencia'], 'CLP')}.\n" if r["diferencia"] < 0 else " · meta cubierta.\n"))
+        md.append("\n" + tabla_md(im, [
+            ("Mes", lambda r: nombre_mes(r["mes"]) + (" (en curso)" if r["en_curso"] else "")),
+            ("Ingreso", lambda r: dinero(r["ingreso_clp"], "CLP")), ("Meta", lambda r: dinero(r["meta"], "CLP")),
+            ("Cumplimiento", lambda r: pct(r["cumplimiento"])),
+            ("Diferencia", lambda r: ("+" if r["diferencia"] >= 0 else "-") + dinero(abs(r["diferencia"]), "CLP")),
+            ("Estado", lambda r: r["estado"])]))
+        md.append("\n_Estado: En meta ≥ 100 % · Cerca ≥ 70 % · Lejos < 70 %. El mes en curso incluye las noches "
+                  "futuras ya reservadas y todavía puede subir._\n")
+
+    md.append("\n## 2. Desempeño del último mes cerrado\n")
     km = d["kpis_mercado"]
     if not km.empty:
-        md.append(tabla_md(km[km["mes_cerrado"]].sort_values("mes", ascending=False).groupby("mercado").head(3), [
+        md.append(tabla_md(km[km["mes_cerrado"]].sort_values(["mercado", "mes"], ascending=[True, False], key=clave_mercado)
+                           .groupby("mercado", sort=False).head(3), [
             ("Mercado", lambda r: r["mercado"]), ("Mes", lambda r: nombre_mes(r["mes"])),
             ("Ocupación", lambda r: pct(r["ocupacion"])), ("ADR", lambda r: dinero(r["adr"], r["moneda_local"])),
             ("RevPAR", lambda r: dinero(r["revpar"], r["moneda_local"])),
@@ -301,7 +400,7 @@ def armar_markdown(d, texto):
             ("ADR", lambda r: dinero(r["adr"], r["moneda_local"])),
             ("RevPAR", lambda r: dinero(r["revpar"], r["moneda_local"]))]))
 
-    md.append("\n## 2. Pronóstico de ocupación\n")
+    md.append("\n## 3. Pronóstico de ocupación\n")
     pr = d["pronostico"]
     if pr.empty:
         md.append("_No hay pronóstico guardado. Corre `python -m analitica.pronostico --guardar`._\n")
@@ -309,7 +408,7 @@ def armar_markdown(d, texto):
         fc = pd.Timestamp(pr["fecha_corte"].iloc[0])
         if (pd.Timestamp(corte) - fc).days > 7:
             md.append(f"> Ojo: el pronóstico es del {fc:%d-%m-%Y}. Vuelve a correrlo para actualizarlo.\n\n")
-        resumen = (pr.groupby(["mes", "moneda"])
+        resumen = (pr.groupby(["mes", "moneda"], sort=False)
                    .agg(disp=("disponibles", "sum"), ya=("reservadas_ya", "sum"),
                         pron=("noches_pronostico", "sum"), ingreso=("ingreso_pronostico", "sum")).reset_index())
         md.append(tabla_md(resumen, [
@@ -319,14 +418,14 @@ def armar_markdown(d, texto):
             ("Ingreso estimado", lambda r: dinero(r["ingreso"], r["moneda"]))]))
         md.append("\n_Método pickup: aún no considera temporada, así que diciembre-febrero pueden salir bajos._\n")
 
-    md.append("\n## 3. Noches libres en los próximos 21 días\n")
+    md.append("\n## 4. Noches libres en los próximos 21 días\n")
     md.append(tabla_md(d["riesgo"], [
         ("Propiedad", lambda r: r["propiedad"]), ("Libres (7 días)", lambda r: int(r["libres_7_dias"])),
         ("Libres (21 días)", lambda r: int(r["noches_libres"])),
         ("Prob. media de venderse", lambda r: pct(r["prob_media"])),
         ("Primera libre", lambda r: pd.Timestamp(r["primera_libre"]).strftime("%d-%m"))]))
 
-    md.append("\n## 4. Reviews\n")
+    md.append("\n## 5. Reviews\n")
     md.append(tabla_md(d["reviews"], [
         ("Propiedad", lambda r: r["propiedad"]), ("Estado", lambda r: r["criticidad"]),
         ("Prom. acumulado", lambda r: "—" if pd.isna(r["promedio_acumulado"]) else f"{r['promedio_acumulado']:.2f}"),
@@ -340,7 +439,7 @@ def armar_markdown(d, texto):
             ("Qué dijo el huésped", lambda r: (list(r["citas"] or []) or [""])[0]),
             ("Acción sugerida", lambda r: (list(r["acciones_sugeridas"] or []) or [""])[0])]))
 
-    md.append("\n## 5. Conversión en Airbnb\n")
+    md.append("\n## 6. Conversión en Airbnb\n")
     cv = d["conversion"]
     if not cv.empty:
         r0 = cv.iloc[0]
@@ -352,7 +451,7 @@ def armar_markdown(d, texto):
         ("Anuncio → reserva", lambda r: pct_airbnb(r["anuncio_a_reserva"], 1)),
         ("Cuello de botella", lambda r: txt(r["cuello_de_botella"]))]))
 
-    md.append("\n## 6. Controles de calidad de datos\n")
+    md.append("\n## 7. Controles de calidad de datos\n")
     if d["controles"].empty:
         md.append("Todos los controles en OK.\n")
     else:

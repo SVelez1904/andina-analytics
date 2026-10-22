@@ -105,6 +105,24 @@ def test_texto_por_reglas():
     assert "None" not in t and "nan" not in t
 
 
+def test_chile_primero():
+    df = pd.DataFrame({"mercado": ["Brasil", "Chile", "Brasil", "Chile"], "mes": [1, 1, 2, 2]})
+    assert reporte.chile_primero(df, ["mercado", "mes"])["mercado"].tolist() == ["Chile", "Chile", "Brasil", "Brasil"]
+    pr = pd.DataFrame({"mes": [1, 1], "moneda": ["BRL", "CLP"]})
+    assert reporte.chile_primero(pr, ["mes", "moneda"])["moneda"].tolist() == ["CLP", "BRL"]
+
+
+def test_ingresos_vs_meta():
+    from datetime import date
+
+    d = {"corte": date(2026, 10, 22),
+         "ingresos": pd.DataFrame({"mes": ["2026-09-01", "2026-10-01"], "ingreso_clp": [15_000_000, 7_000_000]})}
+    im = reporte.ingresos_vs_meta(d)
+    assert im["meta"].tolist() == [14_000_000, 14_000_000]
+    assert im["estado"].tolist() == ["En meta", "Lejos"] and im["en_curso"].tolist() == [False, True]
+    assert round(im["cumplimiento"].iloc[1], 2) == 0.5
+
+
 def test_tabla_md():
     df = pd.DataFrame({"a": ["x|y"], "b": [1]})
     t = reporte.tabla_md(df, [("A", lambda r: r["a"]), ("B", lambda r: r["b"])])

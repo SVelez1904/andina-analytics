@@ -156,6 +156,7 @@ nano .env
 | `ANTHROPIC_API_KEY` | Opcional. Vacío = sin IA (ver sección 11) |
 | `CLAUDE_MODELO_REVIEWS`, `CLAUDE_MODELO_REPORTE` | Dejar `claude-haiku-4-5-20251001` |
 | `CONFIABLE_DESDE` | `2026-05-16` (ver sección 5) |
+| `META_INGRESO_MENSUAL_CLP` | `14000000`: meta de ingresos mensual del KPI financiero (ver sección 7) |
 
 Guarda con Ctrl+O, Enter y sal con Ctrl+X.
 
@@ -347,13 +348,28 @@ Al terminar muestra cuántos tokens usó y el costo aproximado en dólares.
 
 ### Contenido
 
-1. **Resumen** y **Acciones de la semana** (texto).
+- **Resumen** y **Acciones de la semana** (texto). La primera viñeta es siempre el KPI financiero.
+
+1. Rendimiento financiero: ingresos vs meta (ver abajo).
 2. Desempeño del último mes cerrado: ocupación, ADR, RevPAR por mercado y por propiedad.
 3. Pronóstico de los próximos meses (usa el último `--guardar`; avisa si está viejo).
 4. Noches libres en los próximos 21 días.
 5. Reviews: estado por propiedad y pendientes según los comentarios.
 6. Conversión de Airbnb: última captura y cuello de botella de cada propiedad.
 7. Controles de calidad de datos que están en "REVISAR".
+
+En todas las tablas, textos y gráficos (reporte y dashboard), **Chile va siempre antes que Brasil**
+(y CLP antes que BRL). El orden está definido en `ORDEN_MERCADO` de `analitica/config.py`.
+
+### KPI financiero: ingresos vs meta
+
+- **Meta**: 14.000.000 CLP al mes de ingreso por alojamiento, para **todo el portafolio** (Brasil se
+  convierte a CLP con `ingreso_noche_clp`). Se cambia con `META_INGRESO_MENSUAL_CLP` en el `.env`.
+- **Cumplimiento** = ingreso del mes / meta. **Estado**: En meta ≥ 100 % · Cerca ≥ 70 % · Lejos < 70 %.
+- El reporte muestra el último mes cerrado (y cuántos de los últimos 6 meses llegaron a la meta), el mes
+  en curso con lo ya reservado y cuánto falta, y una tabla de 6 meses con ingreso, meta, cumplimiento,
+  diferencia y estado. Si el mes en curso va bajo la meta, se agrega una acción de la semana.
+- El mes en curso incluye las noches futuras ya reservadas ("on the books"), así que todavía puede subir.
 
 ### ¿Quién escribe el texto?
 
@@ -443,8 +459,8 @@ solo muestra y descarga; los reportes se generan en tu computador y se suben con
 
 | Página | Qué muestra |
 |---|---|
-| **Inicio** | Último mes cerrado por mercado (ocupación, ADR, RevPAR con variación vs. mes anterior); propiedades en Crítico/Alerta; pronóstico de los próximos meses; noches libres de los próximos 7 días; aviso si hay controles de datos para revisar |
-| **Ocupación** | Evolución mensual por mercado; ranking de propiedades por mes; pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
+| **Inicio** | KPI financiero: ingreso del último mes cerrado y del mes en curso vs la meta mensual (% de cumplimiento, barra de avance y cuánto falta); último mes cerrado por mercado (ocupación, ADR, RevPAR con variación vs. mes anterior); propiedades en Crítico/Alerta; pronóstico de los próximos meses; noches libres de los próximos 7 días; aviso si hay controles de datos para revisar |
+| **Ocupación** | Ingresos vs meta del período (total, meta × meses, % de cumplimiento y barras por mes con la meta punteada; siempre todo el portafolio, no depende del filtro de anuncios); evolución mensual por mercado; ranking de propiedades por mes; pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
 | **Reviews** | Estado y criticidad; nota general mes a mes por propiedad (línea punteada = 4,80); notas por categoría de los últimos 3 meses; temas de los comentarios (quejas vs. elogios), pendientes con citas y acciones, fortalezas |
 | **Conversión** | Embudo de Airbnb de la última captura: visibilidad (1ª página) → atractivo (búsqueda→anuncio) → cierre (anuncio→reserva), con ✅/⚠️ frente a la referencia y el cuello de botella; tendencia por propiedad; acciones registradas |
 | **Reporte** | Historial y descargas; en tu computador, además, botón para generar el reporte de hoy |
