@@ -7,10 +7,15 @@ Los datasets se llaman igual que los schemas de Postgres (public, analitica): ve
 """
 import datetime as dt
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# Tope por query: si una query mal escrita fuera a escanear más, BigQuery la rechaza sin cobrar.
+# No puede bajar de 10 MB (lo mínimo que se factura por query que lee una tabla). Hoy toda la data pesa < 1 MB.
+MAX_BYTES_FACTURADOS = 100 * 1024 ** 2
 
 
 def _secreto(clave):
@@ -79,19 +84,18 @@ def leer(sql, params=None):
     """SELECT -> DataFrame. Los parámetros se escriben @nombre en el SQL."""
     from google.cloud import bigquery
 
-    cfg = None
-    if params:
-        cfg = bigquery.QueryJobConfig(query_parameters=[_parametro(k, v) for k, v in params.items()])
+    cfg = bigquery.QueryJobConfig(maximum_bytes_billed=MAX_BYTES_FACTURADOS,
+                                  query_parameters=[_parametro(k, v) for k, v in (params or {}).items()])
     df = cliente().query(sql, job_config=cfg).result().to_dataframe(create_bqstorage_client=False)
     return _como_postgres(df)
 
 
-def existe(objeto):
-    """objeto = 'dataset.tabla', ej. 'public.vw_reviews_actual'."""
-    from google.api_core.exceptions import NotFound
-
-    try:
-        cliente().get_table(f"{cliente().project}.{objeto}")
-        return True
-    except NotFound:
-        return False
+def estado(datasets):
+    """(versión, tablas) solo con metadata: no es una query y no se cobra.
+    versión = la última modificación de cualquier tabla (cambia con cada subir_bigquery);
+    tablas = {'dataset.tabla', ...} que existen."""
+    tablas = [t for ds in datasets for t in cliente().list_tables(ds)]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        modificadas = list(ex.map(lambda t: cliente().get_table(t.reference).modified, tablas))
+    version = max(modificadas).isoformat() if modificadas else ""
+    return version, frozenset(f"{t.dataset_id}.{t.table_id}" for t in tablas)

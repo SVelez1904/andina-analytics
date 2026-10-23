@@ -19,9 +19,9 @@ if c.existe("public.vw_fct_noches"):
     ing = c.leer("""SELECT DATE_TRUNC(fecha, MONTH) AS mes, COALESCE(SUM(ingreso_noche_clp), 0) AS ingreso_clp
                     FROM public.vw_fct_noches
                     WHERE vendida
-                      AND fecha >= DATE_SUB(DATE_TRUNC(CURRENT_DATE('America/Santiago'), MONTH), INTERVAL 1 MONTH)
-                      AND fecha <= LAST_DAY(CURRENT_DATE('America/Santiago'), MONTH)
-                    GROUP BY 1 ORDER BY 1""")
+                      AND fecha >= DATE_SUB(DATE_TRUNC(@hoy, MONTH), INTERVAL 1 MONTH)
+                      AND fecha <= LAST_DAY(@hoy, MONTH)
+                    GROUP BY 1 ORDER BY 1""", {"hoy": c.hoy()})
     meta = c.META_INGRESO_MENSUAL_CLP
     st.subheader("Ingresos vs meta")
     st.caption(f"Meta: **{c.dinero(meta, 'CLP')} al mes** (todo el portafolio, Brasil convertido a CLP).")
@@ -42,7 +42,8 @@ if c.existe("public.vw_fct_noches"):
 
 # -- Último mes cerrado por mercado --------------------------------------------------------
 if c.requiere("public.vw_kpis_mercado_mensual", c.COMO_ACTUALIZAR):
-    km = c.leer("SELECT * FROM public.vw_kpis_mercado_mensual WHERE mes_cerrado ORDER BY mercado, mes")
+    km = c.leer("""SELECT mes, mercado, moneda_local, ocupacion, adr, revpar, noches_vendidas, noches_disponibles
+                FROM public.vw_kpis_mercado_mensual WHERE mes_cerrado ORDER BY mercado, mes""")
     km = c.chile_primero(km, ["mercado", "mes"])
     if km.empty:
         st.info("Aún no hay meses cerrados con datos.")
@@ -107,7 +108,8 @@ with col1:
 with col2:
     st.subheader("Pronóstico")
     if c.existe("analitica.vw_pronostico_actual"):
-        pr = c.leer("SELECT * FROM analitica.vw_pronostico_actual")
+        pr = c.leer("""SELECT fecha_corte, mes, moneda, disponibles, reservadas_ya, noches_pronostico
+                     FROM analitica.vw_pronostico_actual""")
         if pr.empty:
             st.info("Corre `python -m analitica.pronostico --guardar` y luego `python -m analitica.subir_bigquery`.")
         else:
@@ -141,5 +143,5 @@ if c.existe("public.vw_controles_calidad"):
 
 st.divider()
 st.caption("Para actualizar: importa en andina_lab → `python -m analitica.pronostico --guardar` → "
-           "`python -m analitica.reviews_ia` → `python -m analitica.subir_bigquery` → recarga esta página "
-           "(los datos se guardan en caché 5 minutos).")
+           "`python -m analitica.reviews_ia` → `python -m analitica.subir_bigquery`. El dashboard lo detecta solo "
+           "en máx. 10 minutos; para verlo al tiro, usa 🔄 Actualizar datos en la barra lateral.")

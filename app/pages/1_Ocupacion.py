@@ -24,7 +24,7 @@ if not c.conexion_ok() or not c.requiere("public.vw_fct_noches", c.COMO_ACTUALIZ
 # SQL en dialecto BigQuery. "hoy" se toma en hora de Chile.
 SQL_MES_COMPLETO = """
 WITH params AS (
-    SELECT CURRENT_DATE('America/Santiago') AS hoy
+    SELECT @hoy AS hoy                   -- hoy en Chile, desde Python (c.hoy())
 ),
 vendidas AS (                            -- una fila por propiedad y noche vendida (sin duplicar solapes)
     SELECT id_propriedade, fecha,
@@ -75,7 +75,7 @@ LEFT JOIN vendidas v ON v.id_propriedade = c.id_propriedade AND v.fecha = c.fech
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY mes
 """
-kp = c.leer(SQL_MES_COMPLETO)
+kp = c.leer(SQL_MES_COMPLETO, {"hoy": c.hoy()})
 if kp.empty:
     st.info("Aún no hay datos de ocupación.")
     st.stop()
@@ -422,7 +422,9 @@ st.subheader("Pronóstico")
 if not c.requiere("analitica.vw_pronostico_actual",
                   "Corre `python -m analitica.pronostico --guardar` y luego `python -m analitica.subir_bigquery`."):
     st.stop()
-pr = c.leer("SELECT * FROM analitica.vw_pronostico_actual ORDER BY mes")
+pr = c.leer("""SELECT propiedad, fecha_corte, mes, moneda, disponibles, reservadas_ya, noches_pronostico,
+                      ocupacion_ya, ocupacion_pronostico, ingreso_ya, ingreso_pronostico
+               FROM analitica.vw_pronostico_actual ORDER BY mes""")
 pr = pr[pr["propiedad"].isin(anuncios)]
 if pr.empty:
     st.info("No hay pronóstico guardado para estos anuncios. Corre `python -m analitica.pronostico --guardar` "

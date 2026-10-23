@@ -9,7 +9,12 @@ reportes/*
 *.xlsx
 .pytest_cache/
 .streamlit/secrets.toml
+.streamlit/secrets*.toml
+!.streamlit/secrets.toml.example
 llave*.json
 *service-account*.json
+client_secret*.json
+*credentials*.json
+application_default_credentials.json
 secrets*.txt*
 *.save

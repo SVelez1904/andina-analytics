@@ -244,7 +244,12 @@ c.ver_tabla(hist.assign(periodo_desde=hist["periodo_desde"].dt.date, periodo_has
 
 # -- 6. Acciones -----------------------------------------------------------------------------------------
 if c.existe("public.vw_acciones_impacto"):
-    acc = c.leer("SELECT * FROM public.vw_acciones_impacto")
+    acc = c.leer("""SELECT id_accion, fecha, propiedad, tipo, descripcion, motivo, costo, estado,
+                          foto_antes_hasta, foto_despues_desde, foto_despues_hasta,
+                          primera_pagina_antes, primera_pagina_despues, busqueda_a_anuncio_antes,
+                          busqueda_a_anuncio_despues, anuncio_a_reserva_antes, anuncio_a_reserva_despues,
+                          conversion_general_antes, conversion_general_despues, delta_conversion_general
+                   FROM public.vw_acciones_impacto""")
     if "propiedad" in acc.columns:
         acc = acc[acc["propiedad"].isin(anuncios)]
     if not acc.empty:
