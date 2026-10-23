@@ -20,7 +20,9 @@ if not c.conexion_ok() or not c.requiere("public.vw_reviews_actual", c.COMO_ACTU
 st.subheader("Estado actual")
 st.caption("Crítico: acumulado < 4,80, promedio 3 meses < 4,70 o una review ≤ 3 este mes. "
            "Alerta: acumulado < 4,90 o 3 meses < 4,85.")
-rv = c.leer("SELECT * FROM public.vw_reviews_actual")
+rv = c.leer("""SELECT propiedad, criticidad, promedio_acumulado, reviews_acumuladas, promedio_3m, reviews_3m,
+                      reviews_mes, peor_categoria_3m, peor_nota_3m, motivo
+               FROM public.vw_reviews_actual""")
 orden = {"Crítico": 0, "Alerta": 1, "OK": 2, "Sin datos suficientes": 3}
 rv = rv.assign(o=rv["criticidad"].map(orden)).sort_values(["o", "promedio_acumulado"])
 rv["Estado"] = rv["criticidad"].map(c.ESTADO).fillna(rv["criticidad"])
@@ -45,8 +47,8 @@ cat = c.leer("""
            SAFE_DIVIDE(SUM(s_valor), SUM(c_valor))                AS valor,
            SUM(reviews)                                           AS reviews
     FROM public.vw_reviews_mensual
-    WHERE CAST(mes AS DATE) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE('America/Santiago'), MONTH), INTERVAL 2 MONTH)
-    GROUP BY propiedad ORDER BY propiedad""")
+    WHERE CAST(mes AS DATE) >= DATE_SUB(DATE_TRUNC(@hoy, MONTH), INTERVAL 2 MONTH)
+    GROUP BY propiedad ORDER BY propiedad""", {"hoy": c.hoy()})
 if not cat.empty:
     nota = lambda t: st.column_config.ProgressColumn(t, format="%.2f", min_value=4.0, max_value=5.0)  # noqa: E731
     st.dataframe(cat, hide_index=True, width="stretch",
@@ -61,24 +63,26 @@ st.subheader("Qué dicen los comentarios (clasificado con IA)")
 def temas_ia():
     if not c.requiere("analitica.vw_pendientes_propiedad", c.COMO_ACTUALIZAR):
         return
-    n_temas = c.leer("SELECT COUNT(*) AS n FROM analitica.review_temas")["n"].iloc[0]
-    if n_temas == 0:
+    # Se lee todo una vez y la propiedad se filtra en pandas: cambiar el filtro no consulta BigQuery
+    det = c.leer("""SELECT propiedad, tema, sentimiento, CAST(fecha AS DATE) AS fecha
+                    FROM analitica.vw_review_temas_detalle""")
+    if det.empty:
         st.info("Aún no hay reviews clasificadas. Corre `python -m analitica.reviews_ia --limite 5` para probar.")
         return
+    pend_todo = c.leer("""SELECT propiedad, tema, menciones, prioridad, severidad_maxima, ultima_mencion,
+                                 en_comentario_privado, citas, acciones_sugeridas
+                          FROM analitica.vw_pendientes_propiedad ORDER BY prioridad DESC, ultima_mencion DESC""")
+    fort_todo = c.leer("""SELECT propiedad, tema, menciones, citas FROM analitica.vw_fortalezas_propiedad
+                          ORDER BY menciones DESC""")
 
-    props = ["Todas"] + sorted(c.leer("SELECT DISTINCT propiedad FROM analitica.vw_review_temas_detalle "
-                                      "WHERE propiedad IS NOT NULL")["propiedad"])
+    props = ["Todas"] + sorted(det["propiedad"].dropna().unique())
     prop = st.selectbox("Propiedad", props)
-    filtro = "" if prop == "Todas" else "AND propiedad = @p"
-    params = {} if prop == "Todas" else {"p": prop}
+    de_prop = (lambda d: d) if prop == "Todas" else (lambda d: d[d["propiedad"] == prop])  # noqa: E731
 
-    temas = c.leer(f"""
-        SELECT tema,
-               COUNTIF(sentimiento IN ('negativo', 'neutro')) AS quejas,
-               COUNTIF(sentimiento = 'positivo')              AS elogios
-        FROM analitica.vw_review_temas_detalle
-        WHERE CAST(fecha AS DATE) >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 90 DAY) {filtro}
-        GROUP BY tema""", params)
+    rec = de_prop(det)
+    rec = rec[pd.to_datetime(rec["fecha"]) >= pd.Timestamp(c.hoy()) - pd.Timedelta(days=90)]
+    temas = (rec.assign(quejas=rec["sentimiento"].isin(["negativo", "neutro"]), elogios=rec["sentimiento"].eq("positivo"))
+                .groupby("tema", as_index=False)[["quejas", "elogios"]].sum())
     if not temas.empty:
         temas["Tema"] = temas["tema"].map(c.NOMBRE_TEMA).fillna(temas["tema"])
         larga = temas.melt(id_vars="Tema", value_vars=["quejas", "elogios"], var_name="Tipo", value_name="Menciones")
@@ -94,10 +98,7 @@ def temas_ia():
         c.ver_tabla(temas[["Tema", "quejas", "elogios"]].rename(columns={"quejas": "Quejas", "elogios": "Elogios"}))
 
     st.markdown("**Pendientes por corregir** (últimos 90 días, ordenados por prioridad = suma de severidades)")
-    pend = c.leer(f"""SELECT propiedad, tema, menciones, prioridad, severidad_maxima, ultima_mencion,
-                             en_comentario_privado, citas, acciones_sugeridas
-                      FROM analitica.vw_pendientes_propiedad WHERE TRUE {filtro}
-                      ORDER BY prioridad DESC, ultima_mencion DESC""", params)
+    pend = de_prop(pend_todo).copy()
     if pend.empty:
         st.markdown("Sin quejas en los últimos 90 días. 🎉")
     else:
@@ -112,8 +113,7 @@ def temas_ia():
                                     "acciones_sugeridas": st.column_config.TextColumn("Acciones sugeridas", width="large")})
 
     st.markdown("**Fortalezas** (lo que más elogian: úsalo en el título y la descripción del anuncio)")
-    fort = c.leer(f"""SELECT propiedad, tema, menciones, citas FROM analitica.vw_fortalezas_propiedad
-                      WHERE TRUE {filtro} ORDER BY menciones DESC LIMIT 30""", params)
+    fort = de_prop(fort_todo).head(30).copy()
     if not fort.empty:
         fort["tema"] = fort["tema"].map(c.NOMBRE_TEMA).fillna(fort["tema"])
         fort["citas"] = fort["citas"].map(lambda x: " · ".join(f"“{t}”" for t in (x or [])))

@@ -17,8 +17,14 @@ if not c.conexion_ok() or not c.requiere("analitica.vw_finanzas_reservas",
                                          "`python -m analitica.subir_bigquery` en tu computador."):
     st.stop()
 
-meses = pd.to_datetime(c.leer("SELECT DISTINCT mes FROM analitica.vw_finanzas_reservas WHERE considerada "
-                              "ORDER BY mes DESC")["mes"]).tolist()
+# Toda la vista se lee una vez (es chica) y el mes se filtra en pandas: cambiar de mes no consulta BigQuery
+todo = c.leer("""SELECT mes, considerada, id_reserva, numero_registro, propiedad, mercado, canal, status_reserva,
+                        fecha_reserva, llegada, salida, fecha_cancelacion, noches_reserva, noches_mes, moneda,
+                        total_reserva, limpieza, ingreso_alojamiento, comision, ingreso_mes_original,
+                        ingreso_mes_clp, noches_sin_tipo_cambio
+                 FROM analitica.vw_finanzas_reservas""")
+todo["mes"] = pd.to_datetime(todo["mes"])
+meses = sorted((pd.Timestamp(m) for m in todo.loc[todo["considerada"], "mes"].unique()), reverse=True)
 if not meses:
     st.info("Aún no hay reservas con ingreso.")
     st.stop()
@@ -27,7 +33,7 @@ mes = st.selectbox("Mes", meses, index=meses.index(hoy_mes) if hoy_mes in meses 
                    format_func=lambda m: c.nombre_mes(m) + (" (en curso)" if m == hoy_mes else
                                                             " (futuro)" if m > hoy_mes else ""))
 
-df = c.leer("SELECT * FROM analitica.vw_finanzas_reservas WHERE mes = @mes", {"mes": mes.date()})
+df = todo[todo["mes"] == mes]
 df = c.chile_primero(df, ["mercado", "propiedad", "llegada"])
 fin = df[df["considerada"]].copy()
 canceladas = df[~df["considerada"]]

@@ -206,8 +206,8 @@ streamlit run app/Inicio.py
 ```
 
 Se abre en http://localhost:8501. Para cerrarlo, Ctrl+C en esa terminal.
-El dashboard guarda los datos 5 minutos en memoria: si no ves un cambio, espera o usa el menú
-⋮ → *Clear cache* y recarga.
+El dashboard guarda los datos en caché y detecta solo las subidas nuevas (máx. 10 minutos); para verlas al
+tiro usa **🔄 Actualizar datos** en la barra lateral (ver 8.6).
 
 ### Frecuencia sugerida
 
@@ -473,7 +473,7 @@ Bajo el título de cada página hay una línea pequeña con la **frescura de los
 "🗓️ Datos hasta el 13-10-2026 (última reserva) · subidos a BigQuery el 15-10-2026 15:19". Si la subida
 tiene más de 7 días, agrega "⚠️ conviene actualizar". El ícono **?** de esa línea muestra el proyecto de
 BigQuery del que se leen los datos. Es una sola consulta pequeña (2 columnas de `public.vw_fct_noches`)
-que se guarda en caché 5 minutos.
+que queda en caché como todo lo demás (ver 8.6).
 
 **¿De dónde salen los datos?** El dashboard lee **siempre de BigQuery** (`app/bq.py`), nunca de Postgres.
 Para ver cuándo se subió cada tabla, en la consola de BigQuery:
@@ -582,7 +582,8 @@ gcloud auth application-default login
 python -m analitica.subir_bigquery --solo analitica.vw_finanzas_reservas
 ```
 
-Luego recarga la página (⋮ → *Clear cache* si sigue el aviso: la existencia de cada vista se guarda 5 minutos).
+Luego recarga la página (o **🔄 Actualizar datos** en la barra lateral si sigue el aviso: la lista de tablas
+se revisa cada 10 minutos).
 
 ### 8.5 Reservas y reviews: cuántas reservas dejan review
 
@@ -610,6 +611,62 @@ SELECT mes_salida, COUNT(*) AS reservas, COUNT(*) FILTER (WHERE con_review) AS c
 FROM analitica.vw_reservas_reviews
 GROUP BY 1 ORDER BY 1;
 ```
+
+### 8.6 Caché y consumo de BigQuery
+
+Objetivo: que F5, cambiar de página o mover un filtro **no** lance queries a BigQuery.
+
+**Cómo funciona** (`app/comun.py` y `app/bq.py`):
+
+| Pieza | Qué hace | Costo |
+|---|---|---|
+| `bq.cliente()` | Cliente de BigQuery creado una vez por servidor (`st.cache_resource`) | — |
+| `estado_datos()` | Cada **10 minutos** lee la *metadata* de las tablas (`list_tables` + `get_table`): qué tablas existen y la última modificación (la "versión" de los datos) | Gratis: no es una query |
+| `leer(sql, params)` | Ejecuta la query y guarda el resultado con la versión como parte de la llave. TTL de **12 horas** | Solo la primera vez por versión |
+| `existe(objeto)` | Revisa la lista de tablas de `estado_datos()` | Gratis |
+
+- Al correr `subir_bigquery` cambia la fecha de modificación de las tablas → en máx. 10 minutos cambia la
+  versión → la siguiente visita relee todo una vez. Mientras no subas datos, **ninguna** visita lanza queries.
+- **🔄 Actualizar datos** (barra lateral, solo con sesión iniciada) borra la caché para todos al instante.
+- Los **filtros se aplican en pandas** sobre lo ya leído (mes, anuncio, propiedad). Las tablas son chicas
+  (toda la data pesa < 1 MB), así que leerlas enteras es lo más barato.
+- **Sin `CURRENT_DATE()` en el SQL**: la fecha de hoy (Chile) se calcula en Python (`c.hoy()`) y va como
+  parámetro `@hoy`. Así BigQuery puede responder desde su propia caché de resultados (gratis).
+- **Tope por query**: `maximum_bytes_billed` = 100 MB (`MAX_BYTES_FACTURADOS` en `app/bq.py`). Si una query
+  fuera a escanear más, BigQuery la rechaza sin cobrar. No puede ser menor a 10 MB (mínimo facturable).
+- **Seguridad**: `configurar()` pide el login **antes** de cualquier lectura, porque la caché es compartida
+  entre todos los usuarios del servidor. Todos los correos autorizados ven los mismos datos, así que la llave
+  de caché no incluye al usuario. La caché nunca guarda credenciales ni tokens.
+
+**Consumo medido** (dry run, todas las páginas):
+
+| Situación | Antes | Ahora |
+|---|---|---|
+| Primera carga (caché vacía) | 23 queries · 0,72 MB procesados · ≈ 200 MB facturados | 21 queries · 0,71 MB · ≈ 190 MB |
+| F5 en todas las páginas | 0 (si pasaron < 5 min) | 0 |
+| Cambiar filtros (mes en Finanzas, período, anuncios, mes en Inicio, propiedad) | 3+ queries (1 por mes en Finanzas, 3 por propiedad en temas IA) | **0** |
+| Cada cuánto se relee todo | cada 5 minutos con uso | solo al subir datos (o cada 12 h) |
+
+BigQuery cobra mínimo 10 MB por query: una primera carga son ≈ 0,2 GB del 1 TB gratis al mes.
+
+**Particionamiento**: las tablas no están particionadas y no hace falta: la más grande (`vw_fct_noches`)
+tiene ~3.500 filas y 0,3 MB, y particionar no baja del mínimo de 10 MB por query. Revisarlo si alguna tabla
+pasa de ~1 GB.
+
+**Verificar en BigQuery que no hay queries de más**: consola de BigQuery → **Historial de trabajos** →
+pestaña **Historial del proyecto**, filtra por *Usuario* = la cuenta `streamlit-lector@…`. Anota el último
+trabajo, aprieta F5 y cambia filtros en el dashboard, y vuelve a cargar el historial: no debe aparecer
+ninguno nuevo. También con SQL:
+
+```sql
+SELECT creation_time, total_bytes_billed, cache_hit, LEFT(query, 80) AS query
+FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+WHERE user_email LIKE 'streamlit-lector@%'
+  AND creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
+ORDER BY creation_time DESC;
+```
+
+(`cache_hit = true` y `total_bytes_billed = 0` = BigQuery respondió desde su caché de resultados.)
 
 ---
 
@@ -701,7 +758,7 @@ Costo aproximado con Haiku:
 | `relation "public.vw_..." does not exist` | Falta ejecutar un `.sql` de andina_lab | Ejecuta en andina_lab `vw_kpis.sql`, `vw_reviews.sql`, `vw_scorecard.sql`, `controles_calidad.sql` (en ese orden) |
 | `ModuleNotFoundError: No module named 'analitica'` | No estás en la carpeta del proyecto o falta activar el entorno | `cd ~/andina_analytics && source .venv/bin/activate` |
 | `streamlit: command not found` | Entorno no activado | `source .venv/bin/activate` |
-| El dashboard no muestra lo recién importado | Pronóstico no recalculado o caché | `python -m analitica.pronostico --guardar` y luego ⋮ → *Clear cache* |
+| El dashboard no muestra lo recién importado | Pronóstico no recalculado o caché | `python -m analitica.pronostico --guardar`, `subir_bigquery` y luego **🔄 Actualizar datos** |
 | Las noches reservadas no coinciden con Stays | Reservas no importadas, rango de exportación corto o estado no considerado | Revisa en pgAdmin la tabla `reservas` de esa propiedad y `vw_fct_noches` (consultas abajo) |
 | `Falta ANTHROPIC_API_KEY` | No hay clave de IA | Normal si no la tienes; usa `--sin-ia` en el reporte |
 | El reporte sale solo en HTML | Faltan librerías de weasyprint | Ver sección 3.1 |

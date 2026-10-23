@@ -42,16 +42,20 @@ NOMBRE_TEMA = {
 
 def configurar(titulo):
     st.set_page_config(page_title=f"{titulo} · Andina Analytics", page_icon="📊", layout="wide")
+    # Login ANTES de cualquier lectura: la caché de datos es compartida entre todos los usuarios del servidor
     auth.require_login()
+    with st.sidebar:
+        st.button("🔄 Actualizar datos", on_click=st.cache_data.clear, type="tertiary",
+                  help="Vuelve a leer BigQuery ahora. Normalmente no hace falta: los datos nuevos aparecen "
+                       "solos hasta 10 minutos después de correr subir_bigquery.")
     st.title(titulo)
     indicador_datos()
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def frescura():
     """Cuándo se subieron los datos a BigQuery y hasta qué reserva llegan. Una consulta chica (2 columnas)."""
-    df = bq.leer("""SELECT MAX(_cargado_en) AS cargado_en, CAST(MAX(fecha_reserva) AS DATE) AS ultima_reserva
-                    FROM public.vw_fct_noches""")
+    df = leer("""SELECT MAX(_cargado_en) AS cargado_en, CAST(MAX(fecha_reserva) AS DATE) AS ultima_reserva
+                 FROM public.vw_fct_noches""")
     return bq.cliente().project, df.iloc[0]["cargado_en"], df.iloc[0]["ultima_reserva"]
 
 
@@ -71,24 +75,46 @@ def indicador_datos():
     st.caption(f"🗓️ {hasta}subidos a BigQuery el {cargado:%d-%m-%Y %H:%M}{aviso}",
                help=f"Fuente: BigQuery, proyecto `{proyecto}`. Todas las páginas leen de ahí; la fecha de subida "
                     "es la columna `_cargado_en` que agrega `python -m analitica.subir_bigquery`. "
-                    "Se consulta cada 5 minutos.")
+                    "Los datos se guardan en caché y se releen solos al detectar una subida nueva "
+                    "(se revisa cada 10 minutos, sin costo).")
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def leer(sql, params=None):
-    """SELECT en BigQuery (parámetros como @nombre). Se guarda 5 minutos en caché."""
+DATASETS = ("public", "analitica")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def estado_datos():
+    """(versión, tablas existentes) leído de la metadata de BigQuery cada 10 minutos. No es una query: no se cobra."""
+    return bq.estado(DATASETS)
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def _leer(sql, params, version_datos):
+    # version_datos no se usa adentro: es parte de la llave de caché. Si cambia (subiste datos), se relee.
+    # (No puede empezar con "_": Streamlit no usa esos argumentos en la llave.)
     return bq.leer(sql, params)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+def leer(sql, params=None):
+    """SELECT en BigQuery (parámetros como @nombre). Queda en caché hasta que se suban datos nuevos (máx. 12 h).
+    No usar CURRENT_DATE() en el SQL: pasar la fecha con c.hoy() como parámetro, así BigQuery
+    también puede usar su caché de resultados."""
+    return _leer(sql, params, estado_datos()[0])
+
+
 def existe(objeto):
-    return bq.existe(objeto)
+    return objeto in estado_datos()[1]
+
+
+def hoy():
+    """Fecha de hoy en Chile, para pasarla como parámetro @hoy."""
+    return pd.Timestamp.now(tz="America/Santiago").date()
 
 
 def conexion_ok():
     """Muestra un error claro si no hay conexión; devuelve True/False."""
     try:
-        leer("SELECT 1 AS ok")
+        estado_datos()
         return True
     except Exception as e:
         st.error("No me pude conectar a BigQuery. En Streamlit Cloud revisa Settings → Secrets "
@@ -136,9 +162,9 @@ def reservas_reviews():
         return df.iloc[0:0], None
     desde = df.loc[df["con_review"], "mes_salida"].min()   # antes no hay reviews cargadas: no se cuentan
     df = df[df["mes_salida"] >= desde].copy()
-    hoy = pd.Timestamp.now(tz="America/Santiago").tz_localize(None).normalize()
-    df["terminada"] = df["salida"] <= hoy
-    df["pendiente"] = df["terminada"] & ~df["con_review"] & ((hoy - df["salida"]).dt.days <= DIAS_PARA_REVIEW)
+    hoy_ = pd.Timestamp(hoy())
+    df["terminada"] = df["salida"] <= hoy_
+    df["pendiente"] = df["terminada"] & ~df["con_review"] & ((hoy_ - df["salida"]).dt.days <= DIAS_PARA_REVIEW)
     return df, desde
 
 
