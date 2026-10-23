@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import comun as c
+from analitica.config import CONFIABLE_DESDE
 
 c.configurar("Ocupación y pronóstico")
 if not c.conexion_ok() or not c.requiere("public.vw_fct_noches", c.COMO_ACTUALIZAR):
@@ -291,6 +292,75 @@ c.ver_tabla(ev.assign(mes=ev["mes"].dt.strftime("%Y-%m")),
             column_config={"ocupacion": st.column_config.NumberColumn("Ocupación", format="percent"),
                            "adr": st.column_config.NumberColumn("ADR", format="%.0f"),
                            "revpar": st.column_config.NumberColumn("RevPAR", format="%.0f")})
+
+# -- 3b. Anticipación de las reservas --------------------------------------------------------------------------
+st.subheader("Con cuánta anticipación reservan")
+# Una fila por reserva: anticipación = primera noche − fecha en que se creó la reserva
+ant = c.leer("""SELECT p.nome_anuncio AS propiedad, n.id_reserva, MIN(n.fecha) AS llegada,
+                       MIN(CAST(n.fecha_reserva AS DATE)) AS fecha_reserva, COUNT(*) AS noches
+                FROM public.vw_fct_noches n
+                JOIN public.dim_propiedades p ON p.id_interno = n.id_propriedade
+                WHERE n.vendida
+                GROUP BY 1, 2""")
+ant["llegada"] = pd.to_datetime(ant["llegada"])
+ant["fecha_reserva"] = pd.to_datetime(ant["fecha_reserva"])
+ant = ant[ant["propiedad"].isin(anuncios) & (ant["fecha_reserva"] >= CONFIABLE_DESDE)]
+solo_periodo = st.toggle("Solo llegadas del período elegido", value=False,
+                         help="Apagado: todas las reservas creadas desde "
+                              f"{pd.Timestamp(CONFIABLE_DESDE):%d-%m-%Y} (más reservas, patrón más estable).")
+if solo_periodo:
+    ant = ant[ant["llegada"].dt.to_period("M").dt.to_timestamp().between(desde, hasta)]
+if ant.empty:
+    st.info("No hay reservas con fecha de creación confiable para este filtro.")
+else:
+    ant["dias"] = (ant["llegada"] - ant["fecha_reserva"]).dt.days.clip(lower=0)
+    tramos = [(2, "0–2 días"), (7, "3–7 días"), (14, "8–14 días"), (30, "15–30 días"), (60, "31–60 días"),
+              (10_000, "Más de 60 días")]
+    nombres = [t for _, t in tramos]
+    ant["tramo"] = pd.cut(ant["dias"], bins=[-1] + [b for b, _ in tramos], labels=nombres)
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Anticipación mediana", f"{ant['dias'].median():.0f} días",
+              help="La mitad de las reservas se hace con menos días que esto.")
+    k2.metric("Reservas de último minuto (≤ 7 días)", c.pct((ant["dias"] <= 7).mean()))
+    k3.metric("Reservas analizadas", f"{len(ant)}")
+
+    res = (ant.groupby("propiedad").agg(reservas=("id_reserva", "count"), mediana=("dias", "median"),
+                                        promedio=("dias", "mean"), p75=("dias", lambda s: s.quantile(0.75)),
+                                        noches=("noches", "mean"))
+              .reset_index().sort_values(["mediana", "promedio"]))
+    res["etiqueta"] = res.apply(lambda r: f"{r.propiedad} · {r.mediana:.0f} d", axis=1)
+    reparto = (ant.groupby(["propiedad", "tramo"], observed=False).size().rename("n").reset_index()
+                  .merge(res[["propiedad", "etiqueta", "reservas"]], on="propiedad"))
+    reparto["part"] = reparto["n"] / reparto["reservas"]
+
+    # 100 % apilado por anuncio: claro = último minuto, oscuro = con mucha anticipación
+    colores_t = c.SECUENCIAL[1:]
+    fig = go.Figure()
+    for tramo, color in zip(nombres, colores_t):
+        g = reparto[reparto["tramo"] == tramo].set_index("etiqueta").reindex(res["etiqueta"])
+        fig.add_bar(y=g.index, x=g["part"], name=tramo, orientation="h", marker_color=color,
+                    customdata=g[["n", "reservas"]],
+                    text=g["part"].map(lambda v: c.pct(v) if v >= 0.08 else ""), textposition="inside",
+                    insidetextanchor="middle", textfont=dict(color="white" if color in c.SECUENCIAL[3:] else "#1d1d1b"),
+                    hovertemplate=f"%{{y}}<br>{tramo}: %{{customdata[0]}} de %{{customdata[1]}} reservas "
+                                  "(%{x:.0%})<extra></extra>")
+    fig.update_layout(barmode="stack", bargap=0.3)
+    fig.update_xaxes(tickformat=".0%", range=[0, 1])
+    fig.update_yaxes(categoryorder="array", categoryarray=list(res["etiqueta"]), autorange="reversed")
+    st.plotly_chart(c.estilo_figura(fig, alto=110 + 34 * len(res)).update_layout(hovermode="closest",
+                                                                                legend_traceorder="normal"),
+                    width="stretch")
+    st.caption("Cada barra reparte las reservas del anuncio según cuántos días antes de la llegada se hicieron. "
+               "Junto al nombre, la anticipación **mediana** (d = días); arriba los que se reservan más a última hora. "
+               f"Solo reservas creadas desde el {pd.Timestamp(CONFIABLE_DESDE):%d-%m-%Y}: las anteriores se migraron "
+               "a Stays y aparecen todas creadas el 15-05-2026. Excluye canceladas.")
+    c.ver_tabla(res[["propiedad", "reservas", "mediana", "promedio", "p75", "noches"]],
+                column_config={"propiedad": "Anuncio", "reservas": "Reservas",
+                               "mediana": st.column_config.NumberColumn("Mediana (días)", format="%.0f"),
+                               "promedio": st.column_config.NumberColumn("Promedio (días)", format="%.1f"),
+                               "p75": st.column_config.NumberColumn("75 % reserva con menos de (días)", format="%.0f"),
+                               "noches": st.column_config.NumberColumn("Noches por reserva", format="%.1f")})
 
 # -- 4. Pronóstico ---------------------------------------------------------------------------------------
 st.divider()
