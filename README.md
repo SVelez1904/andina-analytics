@@ -89,7 +89,8 @@ andina_analytics/
 │       ├── 1_Ocupacion.py
 │       ├── 2_Reviews.py
 │       ├── 3_Conversion.py
-│       └── 4_Reporte.py
+│       ├── 4_Reporte.py
+│       └── 5_Finanzas.py
 ├── .streamlit/config.toml  colores del dashboard
 ├── reportes/               aquí quedan los PDF/HTML generados
 └── tests/                  pruebas automáticas (pytest)
@@ -461,8 +462,9 @@ solo muestra y descarga; los reportes se generan en tu computador y se suben con
 |---|---|
 | **Inicio** | KPI financiero: ingreso del último mes cerrado y del mes en curso vs la meta mensual (% de cumplimiento, barra de avance y cuánto falta); último mes cerrado por mercado (ocupación, ADR, RevPAR con variación vs. mes anterior); propiedades en Crítico/Alerta; pronóstico de los próximos meses; noches libres de los próximos 7 días; aviso si hay controles de datos para revisar |
 | **Ocupación** | Ingresos vs meta del período (total, meta × meses, % de cumplimiento y barras por mes con la meta punteada; siempre todo el portafolio, no depende del filtro de anuncios); evolución mensual por mercado; ranking de propiedades por mes; pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
-| **Reviews** | Estado y criticidad; nota general mes a mes por propiedad (línea punteada = 4,80); notas por categoría de los últimos 3 meses; temas de los comentarios (quejas vs. elogios), pendientes con citas y acciones, fortalezas |
+| **Reviews** | Estado y criticidad; notas por categoría de los últimos 3 meses; temas de los comentarios (quejas vs. elogios), pendientes con citas y acciones, fortalezas; al final, nota general mes a mes: mapa de calor propiedad × mes con la nota en cada celda (escala 4,5–5: naranjo bajo 4,80, azul desde 4,90) y el detalle de una propiedad con el eje ajustado a sus notas |
 | **Conversión** | Embudo de Airbnb de la última captura: visibilidad (1ª página) → atractivo (búsqueda→anuncio) → cierre (anuncio→reserva), con ✅/⚠️ frente a la referencia y el cuello de botella; tendencia por propiedad; acciones registradas |
+| **Finanzas** | De dónde sale el ingreso del KPI para el mes elegido: total, % de la meta, puente por mercado (total reservas − limpieza = alojamiento × tipo de cambio = CLP; la comisión se muestra pero no se descuenta), ingreso por propiedad, reserva por reserva (noches del mes, montos, tipo de cambio, CSV) y las canceladas que no suman |
 | **Reporte** | Historial y descargas; en tu computador, además, botón para generar el reporte de hoy |
 
 Bajo el título de cada página hay una línea pequeña con la **frescura de los datos**:
@@ -502,6 +504,7 @@ Las puedes consultar en pgAdmin → base `stays` → Schemas → `analitica`.
 | `vw_pronostico_actual` | vista | Solo el último pronóstico guardado, con % reservado y % pronosticado |
 | `pronostico_noches` | tabla | Pronóstico noche a noche |
 | `vw_noches_en_riesgo` | vista | Noches **libres** de los próximos 21 días del último pronóstico, con su probabilidad |
+| `vw_finanzas_reservas` | vista | Desglose del KPI de ingresos: una fila por reserva y mes, con total, limpieza, comisión, noches del mes e ingreso en moneda original y CLP (suma lo mismo que `vw_fct_noches`). Canceladas con `considerada = false` |
 | `reportes` | tabla | Historial de reportes: texto, cifras (JSON), modelo de IA, tokens, archivo |
 
 Ejemplos útiles en pgAdmin:

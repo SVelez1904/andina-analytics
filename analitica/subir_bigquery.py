@@ -35,7 +35,7 @@ OBJETOS = {
     "analitica": [
         "vw_pronostico_actual", "pronostico_noches", "vw_noches_en_riesgo",
         "review_temas", "vw_review_temas_detalle", "vw_pendientes_propiedad", "vw_fortalezas_propiedad",
-        "reportes",
+        "vw_finanzas_reservas", "reportes",
     ],
 }
 

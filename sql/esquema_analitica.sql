@@ -111,6 +111,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA analitica TO analit
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA analitica TO analitica_app;
 
 -- 4. Vistas de análisis -----------------------------------------------------------------
+DROP VIEW IF EXISTS analitica.vw_finanzas_reservas;
 DROP VIEW IF EXISTS analitica.vw_noches_en_riesgo;
 DROP VIEW IF EXISTS analitica.vw_pronostico_actual;
 DROP VIEW IF EXISTS analitica.vw_fortalezas_propiedad;
@@ -178,5 +179,66 @@ JOIN public.dim_propiedades p ON p.id_interno = pn.id_propriedade
 WHERE pn.fecha_corte = (SELECT MAX(fecha_corte) FROM analitica.pronostico_noches)
   AND NOT pn.reservada
   AND pn.fecha BETWEEN pn.fecha_corte AND pn.fecha_corte + 20;   -- 21 noches, incluida la de hoy
+
+-- Desglose del KPI de ingresos: una fila por reserva y mes. ingreso_mes_clp suma exactamente lo mismo
+-- que SUM(ingreso_noche_clp) de public.vw_fct_noches (página Finanzas). Las canceladas van con
+-- considerada = FALSE e ingreso 0, solo para mostrar qué quedó fuera. Sin datos del huésped.
+CREATE VIEW analitica.vw_finanzas_reservas AS
+WITH noches AS (                 -- lo que suma el KPI de ingresos: noches vendidas de vw_fct_noches
+    SELECT n.id_reserva,
+           date_trunc('month', n.fecha)::date                    AS mes,
+           MIN(n.moneda_local)                                   AS moneda_local,
+           COUNT(*)                                              AS noches_mes,
+           SUM(n.ingreso_noche_original)                         AS ingreso_mes_original,
+           SUM(n.ingreso_noche_clp)                              AS ingreso_mes_clp,
+           COUNT(*) FILTER (WHERE n.ingreso_noche_clp IS NULL)   AS noches_sin_tipo_cambio
+    FROM public.vw_fct_noches n
+    WHERE n.vendida
+    GROUP BY n.id_reserva, date_trunc('month', n.fecha)
+),
+canceladas AS (                  -- no suman: se muestran para saber qué quedó fuera
+    SELECT r.id_reserva,
+           date_trunc('month', r.data_chegada + d)::date         AS mes,
+           COUNT(*)                                              AS noches_mes
+    FROM public.reservas r
+    CROSS JOIN LATERAL generate_series(0, GREATEST(r.data_checkout - r.data_chegada, 1) - 1) AS d
+    WHERE r.data_cancelamento IS NOT NULL OR LOWER(r.status_reserva) LIKE '%cancel%'
+    GROUP BY r.id_reserva, date_trunc('month', r.data_chegada + d)
+),
+filas AS (
+    SELECT id_reserva, mes, moneda_local, noches_mes, ingreso_mes_original, ingreso_mes_clp,
+           noches_sin_tipo_cambio, TRUE AS considerada
+    FROM noches
+    UNION ALL
+    SELECT id_reserva, mes, NULL, noches_mes, 0, 0, 0, FALSE
+    FROM canceladas
+)
+SELECT f.mes,
+       f.considerada,
+       r.id_reserva,
+       r.numero_registro,
+       p.nome_anuncio                                            AS propiedad,
+       CASE COALESCE(f.moneda_local, pf.moneda_local, 'CLP') WHEN 'BRL' THEN 'Brasil' ELSE 'Chile' END AS mercado,
+       ca.nome_canal                                             AS canal,
+       r.status_reserva,
+       r.data_criacao                                            AS fecha_reserva,
+       r.data_chegada                                            AS llegada,
+       r.data_checkout                                           AS salida,
+       r.data_cancelamento                                       AS fecha_cancelacion,
+       GREATEST(r.data_checkout - r.data_chegada, 1)             AS noches_reserva,
+       f.noches_mes,
+       r.moeda                                                   AS moneda,
+       r.total_reserva,
+       COALESCE(r.taxa_limpeza, 0)                               AS limpieza,
+       r.total_reserva - COALESCE(r.taxa_limpeza, 0)             AS ingreso_alojamiento,
+       r.comissao_empresa                                        AS comision,
+       f.ingreso_mes_original,
+       f.ingreso_mes_clp,
+       f.noches_sin_tipo_cambio
+FROM filas f
+JOIN public.reservas r              ON r.id_reserva = f.id_reserva
+JOIN public.dim_propiedades p       ON p.id_interno = r.id_propriedade
+LEFT JOIN public.propiedad_fechas pf ON pf.id_propriedade = r.id_propriedade
+LEFT JOIN public.dim_canales ca     ON ca.id_canal = r.id_canal;
 
 GRANT SELECT ON ALL TABLES IN SCHEMA analitica TO analitica_app;
