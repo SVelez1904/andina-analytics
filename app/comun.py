@@ -122,6 +122,38 @@ def requiere(objeto, como_crearlo):
     return True
 
 
+DIAS_PARA_REVIEW = 14   # Airbnb da 14 días desde el check-out para dejar la review
+
+
+def reservas_reviews():
+    """Una fila por reserva no cancelada con su review (si la dejó), desde el primer mes con reviews importadas.
+    Agrega terminada (ya hizo check-out) y pendiente (terminada, sin review y todavía dentro de los 14 días)."""
+    df = leer("""SELECT propiedad, mercado, id_reserva, llegada, salida, mes_salida, con_review, fecha_review, nota
+                 FROM analitica.vw_reservas_reviews""")
+    for col in ("llegada", "salida", "mes_salida", "fecha_review"):
+        df[col] = pd.to_datetime(df[col])
+    if not df["con_review"].any():
+        return df.iloc[0:0], None
+    desde = df.loc[df["con_review"], "mes_salida"].min()   # antes no hay reviews cargadas: no se cuentan
+    df = df[df["mes_salida"] >= desde].copy()
+    hoy = pd.Timestamp.now(tz="America/Santiago").tz_localize(None).normalize()
+    df["terminada"] = df["salida"] <= hoy
+    df["pendiente"] = df["terminada"] & ~df["con_review"] & ((hoy - df["salida"]).dt.days <= DIAS_PARA_REVIEW)
+    return df, desde
+
+
+def resumen_reviews(df, por):
+    """Reservas, terminadas, con review y % con review (sobre las terminadas), agrupado por las columnas `por`
+    (lista vacía = una sola fila con el total)."""
+    if not por:
+        df, por = df.assign(total="Total"), ["total"]
+    g = df.groupby(por, as_index=False).agg(reservas=("id_reserva", "count"), terminadas=("terminada", "sum"),
+                                            con_review=("con_review", "sum"), pendientes=("pendiente", "sum"),
+                                            nota=("nota", "mean"))
+    g["tasa"] = g["con_review"] / g["terminadas"].where(g["terminadas"] > 0)
+    return g
+
+
 def nombre_mes(d, largo=False):
     d = pd.Timestamp(d)
     return f"{MESES[d.month - 1]} {d.year}" if not largo else f"{MESES[d.month - 1]}-{str(d.year)[2:]}"

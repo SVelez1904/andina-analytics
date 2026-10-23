@@ -362,6 +362,60 @@ else:
                                "p75": st.column_config.NumberColumn("75 % reserva con menos de (días)", format="%.0f"),
                                "noches": st.column_config.NumberColumn("Noches por reserva", format="%.1f")})
 
+# -- 3c. Reservas y reviews --------------------------------------------------------------------------------
+st.subheader("Reservas y reviews")
+if c.requiere("analitica.vw_reservas_reviews", "Ejecuta de nuevo `sql/esquema_analitica.sql` y luego "
+                                                "`python -m analitica.subir_bigquery` en tu computador."):
+    rr, rev_desde = c.reservas_reviews()
+    rr = rr[rr["propiedad"].isin(anuncios) & rr["mes_salida"].between(desde, hasta)]
+    if rr.empty:
+        st.info("No hay reservas con salida en el período (las reviews se cargan desde "
+                f"{c.nombre_mes(rev_desde) if rev_desde is not None else '—'}).")
+    else:
+        tot = c.resumen_reviews(rr, []).iloc[0]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Reservas", f"{int(tot['reservas'])}", help="Reservas no canceladas con salida (check-out) en el período.")
+        k2.metric("Estadías terminadas", f"{int(tot['terminadas'])}")
+        k3.metric("Dejaron review", f"{int(tot['con_review'])} · {c.pct(tot['tasa'])}",
+                  help="Porcentaje sobre las estadías terminadas.")
+        k4.metric("Aún pueden dejarla", f"{int(tot['pendientes'])}",
+                  help=f"Terminadas hace {c.DIAS_PARA_REVIEW} días o menos y todavía sin review.")
+
+        pm = c.resumen_reviews(rr, ["mes_salida"]).sort_values("mes_salida")
+        fig = go.Figure()
+        fig.add_bar(x=pm["mes_salida"], y=pm["reservas"], name="Reservas", marker_color=c.AZUL_CLARO,
+                    hovertemplate="%{x|%b %Y}: %{y} reservas<extra></extra>")
+        fig.add_bar(x=pm["mes_salida"], y=pm["con_review"], name="Con review", marker_color=c.AZUL,
+                    text=pm["tasa"].map(c.pct), textposition="outside", cliponaxis=False,
+                    customdata=pm[["terminadas"]],
+                    hovertemplate="%{x|%b %Y}: %{y} con review de %{customdata[0]} terminadas (%{text})<extra></extra>")
+        fig.update_layout(barmode="group", bargap=0.3, bargroupgap=0.08)
+        fig.update_xaxes(dtick="M1", tickformat="%b %Y")
+        fig.update_yaxes(range=[0, pm["reservas"].max() * 1.18])
+        st.plotly_chart(c.estilo_figura(fig, alto=300).update_layout(hovermode="x unified"), width="stretch")
+
+        pp = c.resumen_reviews(rr, ["propiedad"]).sort_values(["tasa", "terminadas"], ascending=[False, False])
+        fig = go.Figure(go.Bar(
+            y=pp["propiedad"], x=pp["tasa"], orientation="h", marker_color=c.AZUL,
+            text=[f"{c.pct(t)} · {int(r)} de {int(n)}" for t, r, n in zip(pp["tasa"], pp["con_review"], pp["terminadas"])],
+            textposition="outside", cliponaxis=False,
+            hovertemplate="%{y}: %{text}<extra></extra>"))
+        fig.update_xaxes(tickformat=".0%", range=[0, 1.25])
+        fig.update_yaxes(autorange="reversed")
+        st.markdown("**% de estadías terminadas que dejaron review, por anuncio**")
+        st.plotly_chart(c.estilo_figura(fig, alto=80 + 30 * len(pp), leyenda=False).update_layout(hovermode="closest"),
+                        width="stretch")
+        st.caption("Por mes de **salida** (check-out): la review llega después de la estadía y Airbnb da "
+                   f"{c.DIAS_PARA_REVIEW} días para dejarla, así que los meses recientes todavía pueden subir. "
+                   "El % se calcula sobre las estadías ya terminadas; excluye canceladas. "
+                   f"Las reviews están cargadas desde {c.nombre_mes(rev_desde)}: los meses anteriores no se cuentan.")
+        c.ver_tabla(pd.concat([pm.assign(mes_salida=pm["mes_salida"].map(c.nombre_mes)).rename(columns={"mes_salida": "grupo"}),
+                               pp.rename(columns={"propiedad": "grupo"})]),
+                    column_config={"grupo": "Mes / anuncio", "reservas": "Reservas", "terminadas": "Terminadas",
+                                   "con_review": "Con review", "pendientes": "Aún pueden dejarla",
+                                   "tasa": st.column_config.NumberColumn("% con review", format="percent"),
+                                   "nota": st.column_config.NumberColumn("Nota promedio", format="%.2f")})
+
 # -- 4. Pronóstico ---------------------------------------------------------------------------------------
 st.divider()
 st.subheader("Pronóstico")

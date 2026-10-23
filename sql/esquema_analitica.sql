@@ -111,6 +111,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA analitica TO analit
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA analitica TO analitica_app;
 
 -- 4. Vistas de análisis -----------------------------------------------------------------
+DROP VIEW IF EXISTS analitica.vw_reservas_reviews;
 DROP VIEW IF EXISTS analitica.vw_finanzas_reservas;
 DROP VIEW IF EXISTS analitica.vw_noches_en_riesgo;
 DROP VIEW IF EXISTS analitica.vw_pronostico_actual;
@@ -240,5 +241,26 @@ JOIN public.reservas r              ON r.id_reserva = f.id_reserva
 JOIN public.dim_propiedades p       ON p.id_interno = r.id_propriedade
 LEFT JOIN public.propiedad_fechas pf ON pf.id_propriedade = r.id_propriedade
 LEFT JOIN public.dim_canales ca     ON ca.id_canal = r.id_canal;
+
+-- Reservas vs reviews: una fila por reserva no cancelada, con su review si la dejó (se enlazan por id_reserva).
+-- Se agrupa por mes de SALIDA: la review llega después del check-out (Airbnb da 14 días).
+CREATE VIEW analitica.vw_reservas_reviews AS
+SELECT r.id_reserva,
+       r.id_propriedade,
+       p.nome_anuncio                                            AS propiedad,
+       CASE COALESCE(pf.moneda_local, 'CLP') WHEN 'BRL' THEN 'Brasil' ELSE 'Chile' END AS mercado,
+       r.data_chegada                                            AS llegada,
+       r.data_checkout                                           AS salida,
+       date_trunc('month', r.data_checkout)::date                AS mes_salida,
+       (a.id_reserva IS NOT NULL)                                AS con_review,
+       a.fecha                                                   AS fecha_review,
+       a.nota
+FROM public.reservas r
+JOIN public.dim_propiedades p        ON p.id_interno = r.id_propriedade
+LEFT JOIN public.propiedad_fechas pf ON pf.id_propriedade = r.id_propriedade
+LEFT JOIN (SELECT id_reserva, MIN(fecha) AS fecha, AVG(rating_general) AS nota
+           FROM public.avaliaciones GROUP BY id_reserva) a ON a.id_reserva = r.id_reserva
+WHERE r.data_cancelamento IS NULL
+  AND LOWER(r.status_reserva) NOT LIKE '%cancel%';
 
 GRANT SELECT ON ALL TABLES IN SCHEMA analitica TO analitica_app;

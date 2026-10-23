@@ -61,6 +61,28 @@ if c.requiere("public.vw_kpis_mercado_mensual", c.COMO_ACTUALIZAR):
                   None if ant is None or not ant["revpar"] else f"{ult['revpar'] / ant['revpar'] - 1:+.1%}")
         k4.metric("Noches vendidas", f"{int(ult['noches_vendidas'])} de {int(ult['noches_disponibles'])}")
 
+# -- Reservas y reviews del mes ------------------------------------------------------------------------
+if c.existe("analitica.vw_reservas_reviews"):
+    rr, rev_desde = c.reservas_reviews()
+    if not rr.empty:
+        st.divider()
+        st.subheader("Reservas y reviews")
+        meses_rr = sorted(rr["mes_salida"].unique(), reverse=True)
+        hoy_mes = pd.Timestamp.today().normalize().replace(day=1)
+        cerrados = [m for m in meses_rr if m < hoy_mes]
+        mes_rr = st.selectbox("Mes analizado (por fecha de salida)", meses_rr,
+                              index=meses_rr.index(cerrados[0]) if cerrados else 0, format_func=c.nombre_mes)
+        tot = c.resumen_reviews(rr[rr["mes_salida"] == mes_rr], []).iloc[0]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Reservas", f"{int(tot['reservas'])}", help="Reservas no canceladas con salida en el mes.")
+        k2.metric("Estadías terminadas", f"{int(tot['terminadas'])}")
+        k3.metric("Dejaron review", f"{int(tot['con_review'])} · {c.pct(tot['tasa'])}",
+                  help="Porcentaje sobre las estadías terminadas.")
+        k4.metric("Aún pueden dejarla", f"{int(tot['pendientes'])}",
+                  help=f"Terminadas hace {c.DIAS_PARA_REVIEW} días o menos y todavía sin review.")
+        st.caption(f"Airbnb da {c.DIAS_PARA_REVIEW} días después del check-out para dejar la review. El detalle por "
+                   "anuncio y la evolución por mes están en **Ocupación**.")
+
 st.divider()
 col1, col2, col3 = st.columns(3)
 

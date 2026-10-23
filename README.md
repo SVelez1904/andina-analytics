@@ -462,8 +462,8 @@ solo muestra y descarga; los reportes se generan en tu computador y se suben con
 
 | Página | Qué muestra |
 |---|---|
-| **Inicio** | KPI financiero: ingreso del último mes cerrado y del mes en curso vs la meta mensual (% de cumplimiento, barra de avance y cuánto falta); último mes cerrado por mercado (ocupación, ADR, RevPAR con variación vs. mes anterior); propiedades en Crítico/Alerta; pronóstico de los próximos meses; noches libres de los próximos 7 días; aviso si hay controles de datos para revisar |
-| **Ocupación** | Ingresos vs meta del período (total, meta × meses, % de cumplimiento y barras por mes con la meta punteada; siempre todo el portafolio, no depende del filtro de anuncios); evolución mensual por mercado; ranking de propiedades por mes; **anticipación de las reservas** por anuncio (barras 100 % por tramos: 0–2, 3–7, 8–14, 15–30, 31–60 y más de 60 días entre que se crea la reserva y la llegada, con la mediana junto al nombre; usa todas las reservas desde `CONFIABLE_DESDE` o, con el interruptor, solo las llegadas del período); pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
+| **Inicio** | KPI financiero: ingreso del último mes cerrado y del mes en curso vs la meta mensual (% de cumplimiento, barra de avance y cuánto falta); último mes cerrado por mercado (ocupación, ADR, RevPAR con variación vs. mes anterior); reservas y reviews del mes que elijas (por defecto el último cerrado): reservas, estadías terminadas, cuántas dejaron review y %, y cuántas aún pueden dejarla; propiedades en Crítico/Alerta; pronóstico de los próximos meses; noches libres de los próximos 7 días; aviso si hay controles de datos para revisar |
+| **Ocupación** | Ingresos vs meta del período (total, meta × meses, % de cumplimiento y barras por mes con la meta punteada; siempre todo el portafolio, no depende del filtro de anuncios); evolución mensual por mercado; ranking de propiedades por mes; **anticipación de las reservas** por anuncio (barras 100 % por tramos: 0–2, 3–7, 8–14, 15–30, 31–60 y más de 60 días entre que se crea la reserva y la llegada, con la mediana junto al nombre; usa todas las reservas desde `CONFIABLE_DESDE` o, con el interruptor, solo las llegadas del período); **reservas y reviews** del período y anuncios filtrados: reservas por mes vs. con review (con el % sobre las terminadas) y % de review por anuncio; pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
 | **Reviews** | Estado y criticidad; notas por categoría de los últimos 3 meses; temas de los comentarios (quejas vs. elogios), pendientes con citas y acciones, fortalezas; al final, nota general mes a mes: mapa de calor propiedad × mes con la nota en cada celda (escala 4,5–5: naranjo bajo 4,80, azul desde 4,90) y el detalle de una propiedad con el eje ajustado a sus notas |
 | **Conversión** | Embudo de Airbnb de la última captura: visibilidad (1ª página) → atractivo (búsqueda→anuncio) → cierre (anuncio→reserva), con ✅/⚠️ frente a la referencia y el cuello de botella; tendencia por propiedad; acciones registradas |
 | **Finanzas** | De dónde sale el ingreso del KPI para el mes elegido: total, % de la meta, puente por mercado (total reservas − limpieza = alojamiento × tipo de cambio = CLP; la comisión se muestra pero no se descuenta), ingreso por propiedad, reserva por reserva (noches del mes, montos, tipo de cambio, CSV) y las canceladas que no suman |
@@ -584,6 +584,33 @@ python -m analitica.subir_bigquery --solo analitica.vw_finanzas_reservas
 
 Luego recarga la página (⋮ → *Clear cache* si sigue el aviso: la existencia de cada vista se guarda 5 minutos).
 
+### 8.5 Reservas y reviews: cuántas reservas dejan review
+
+Aparece en **Inicio** (un mes, con selector "Mes analizado") y en **Ocupación** (período y anuncios de la
+barra lateral, por mes y por anuncio).
+
+**De dónde sale.** `analitica.vw_reservas_reviews` (en `sql/esquema_analitica.sql`) toma `public.reservas`
+(sin canceladas, mismo criterio que el KPI de ingresos) y le pega `public.avaliaciones` por `id_reserva`:
+una fila por reserva, con `con_review`, la fecha y la nota. Se sube a BigQuery con `subir_bigquery`.
+
+**Cómo se cuenta.**
+
+- Cada reserva va al mes de su **salida** (check-out): la review se escribe después de la estadía.
+- **Reservas** = reservas no canceladas con salida en el mes. **Estadías terminadas** = las que ya hicieron check-out.
+- **% con review** = reservas con review ÷ estadías terminadas (las futuras no cuentan en el denominador).
+- **Aún pueden dejarla** = terminadas hace 14 días o menos y sin review (Airbnb da 14 días;
+  `DIAS_PARA_REVIEW` en `app/comun.py`). Por eso el mes en curso y el anterior todavía pueden subir.
+- Solo se cuentan meses desde el primero que tiene reviews cargadas (hoy, mayo 2026): antes no se
+  importaron reviews y el % saldría 0 sin serlo.
+
+Verificar en pgAdmin:
+
+```sql
+SELECT mes_salida, COUNT(*) AS reservas, COUNT(*) FILTER (WHERE con_review) AS con_review
+FROM analitica.vw_reservas_reviews
+GROUP BY 1 ORDER BY 1;
+```
+
 ---
 
 ## 9. Tablas y vistas del esquema `analitica`
@@ -602,6 +629,7 @@ Las puedes consultar en pgAdmin → base `stays` → Schemas → `analitica`.
 | `pronostico_noches` | tabla | Pronóstico noche a noche |
 | `vw_noches_en_riesgo` | vista | Noches **libres** de los próximos 21 días del último pronóstico, con su probabilidad |
 | `vw_finanzas_reservas` | vista | Desglose del KPI de ingresos: una fila por reserva y mes, con total, limpieza, comisión, noches del mes e ingreso en moneda original y CLP (suma lo mismo que `vw_fct_noches`). Canceladas con `considerada = false` |
+| `vw_reservas_reviews` | vista | Una fila por reserva no cancelada con su review si la dejó (enlazadas por `id_reserva`), mes de salida y nota. Base del % de reservas que dejan review |
 | `reportes` | tabla | Historial de reportes: texto, cifras (JSON), modelo de IA, tokens, archivo |
 
 Ejemplos útiles en pgAdmin:
