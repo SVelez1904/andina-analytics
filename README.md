@@ -140,7 +140,9 @@ Qué hace:
 - Crea el esquema `analitica` con sus tablas y vistas (ver sección 9).
 
 Se puede volver a ejecutar cuando quieras: no borra datos. Sirve para cambiar la clave o si
-aparece un error de permisos.
+aparece un error de permisos. **Ojo:** cada ejecución deja como clave de `analitica_app` la que pases en
+`analitica_pass`; si solo quieres crear vistas nuevas, pasa la misma del `.env`:
+`-v analitica_pass="$(grep '^ANALITICA_DB_PASSWORD=' .env | cut -d= -f2-)"`.
 
 ### 3.3 Archivo `.env`
 
@@ -487,6 +489,101 @@ Cada gráfico tiene debajo **"Ver tabla"** con los números exactos (se puede de
 
 ADR y RevPAR se muestran **por mercado y en su moneda** (CLP para Chile, BRL para Brasil); nunca se mezclan en un mismo eje.
 
+### 8.4 Página Finanzas: de dónde sale el ingreso
+
+**Qué hace.** Explica, para el mes que elijas, cómo se llega al número de **ingresos vs meta** que muestran
+Inicio y el reporte semanal: qué reservas suman, cuánto aporta cada una y qué queda fuera. Sirve para
+cuadrar el KPI contra Stays o Airbnb y para responder "¿por qué este mes dio X?".
+
+**De dónde extrae la información.** Todo nace en la base Postgres de andina_lab y llega a la página así:
+
+```
+andina_lab (Postgres, esquema public)
+  reservas             total_reserva, taxa_limpeza, comissao_empresa, moeda, fechas de llegada/salida,
+                       status_reserva, data_cancelamento, numero_registro, id_canal
+  dim_propiedades      nombre del anuncio (nome_anuncio)
+  propiedad_fechas     moneda local de la propiedad (CLP/BRL), fecha de alta y de baja
+  dim_canales          nombre del canal (Airbnb, Booking, directo…)
+  tipo_cambio_mensual  tasa BRL→CLP de cada mes (respaldo: tipo_cambio, valor fijo)
+        │
+        ▼  sql/vw_kpis.sql de andina_lab
+  public.vw_fct_noches       una fila por propiedad y noche, con el ingreso de esa noche en CLP
+        │                    (es lo que suma el KPI de ingresos)
+        ▼  sql/esquema_analitica.sql de este proyecto
+  analitica.vw_finanzas_reservas   una fila por reserva y mes: agrupa las noches de vw_fct_noches y les
+        │                          pega los montos de la reserva (total, limpieza, comisión, canal)
+        ▼  python -m analitica.subir_bigquery
+  BigQuery (dataset analitica)  →  app/pages/5_Finanzas.py
+```
+
+La vista **no toma datos de huéspedes** (nombres, correos, documentos): solo montos, fechas y el N° de
+reserva.
+
+**Cómo se calcula el ingreso.** Por cada reserva **no cancelada**:
+
+1. **Ingreso por alojamiento** = `total_reserva − taxa_limpeza` (la limpieza no es ingreso por alojamiento).
+2. Se divide **en partes iguales por noche**: ingreso por alojamiento ÷ noches de la reserva.
+3. Cada noche se asigna al **mes en que cae**. Una reserva del 30-sep al 3-oct (3 noches) aporta 1 noche a
+   septiembre y 2 a octubre.
+4. Cada noche se convierte a **CLP** con la tasa de su mes (`tipo_cambio_mensual`; si falta el mes, el valor
+   fijo de `tipo_cambio`). Las reservas en CLP quedan igual (tasa 1).
+5. Se suman todas las noches del mes de todas las propiedades, Chile y Brasil. Ese total es el KPI.
+
+Ejemplo: reserva de 3 noches por 211.000 CLP con 25.000 de limpieza → 186.000 de alojamiento → 62.000 por
+noche. Si 2 noches caen en octubre, aporta 124.000 CLP a octubre.
+
+**Qué NO considera.**
+
+- Reservas **canceladas** (`data_cancelamento` con fecha o estado que contenga "cancel"). Se listan al final
+  de la página para que sepas qué quedó fuera, pero no suman.
+- Noches **antes de la fecha de alta** o **desde la fecha de baja** de la propiedad (`propiedad_fechas`).
+- La **comisión** de la plataforma (`comissao_empresa`) **no se descuenta**: el KPI es ingreso bruto por
+  alojamiento. La página la muestra solo como referencia.
+- Costos de operación, impuestos, limpieza cobrada al huésped.
+- Noches de una moneda sin tipo de cambio a CLP: no suman y la página muestra un aviso con cuántas son.
+
+**Qué muestra la página.**
+
+| Sección | Contenido |
+|---|---|
+| Resultado | Ingreso del mes en CLP y % de la meta, reservas consideradas, noches vendidas, promedio por noche. El mes en curso y los futuros incluyen noches ya reservadas que aún no ocurren |
+| Cómo se llega al número | Puente por mercado, en la moneda de la reserva: total de reservas − limpieza = alojamiento × tipo de cambio = ingreso CLP. Los montos están **prorrateados** a las noches del mes. Comisión aparte, sin descontar |
+| Por propiedad | Ingreso CLP por propiedad (barras de color por mercado) y tabla con noches, reservas y % del total |
+| Reserva por reserva | Una fila por reserva con noches en el mes: canal, N° de reserva, fechas, noches de la reserva y del mes, total, limpieza, alojamiento total y del mes, tipo de cambio e ingreso CLP. Botón para descargar CSV |
+| Canceladas, no suman | Reservas canceladas con noches en ese mes (solo si hay) |
+
+**Cómo verificarlo tú mismo** (pgAdmin, como `stays` o `analitica_app`): las dos consultas deben dar lo mismo.
+
+```sql
+-- Lo que suma el KPI
+SELECT SUM(ingreso_noche_clp) FROM vw_fct_noches
+WHERE vendida AND date_trunc('month', fecha) = '2026-10-01';
+
+-- Lo que suma la página Finanzas
+SELECT SUM(ingreso_mes_clp) FROM analitica.vw_finanzas_reservas
+WHERE considerada AND mes = '2026-10-01';
+```
+
+**Activarla (una vez).** La vista se crea con `sql/esquema_analitica.sql` y se sube con `subir_bigquery`.
+Si la página dice *"Todavía no existe analitica.vw_finanzas_reservas"*, ejecuta en tu computador, desde la
+carpeta `andina_analytics`:
+
+```bash
+# 1) Crear la vista en Postgres. Te pedirá la clave de "stays" (la del .env de andina_lab).
+#    analitica_pass se lee del .env para que la clave de analitica_app NO cambie.
+psql -h localhost -U stays -d stays \
+     -v analitica_pass="$(grep '^ANALITICA_DB_PASSWORD=' .env | cut -d= -f2-)" \
+     -f sql/esquema_analitica.sql
+
+# 2) Si BigQuery pide volver a iniciar sesión (RefreshError: Reauthentication is needed)
+gcloud auth application-default login
+
+# 3) Subirla a BigQuery (solo esa vista, o sin --solo para subir todo)
+python -m analitica.subir_bigquery --solo analitica.vw_finanzas_reservas
+```
+
+Luego recarga la página (⋮ → *Clear cache* si sigue el aviso: la existencia de cada vista se guarda 5 minutos).
+
 ---
 
 ## 9. Tablas y vistas del esquema `analitica`
@@ -572,6 +669,7 @@ Costo aproximado con Haiku:
 | `password authentication failed for user "analitica_app"` | La clave del `.env` no coincide con la de `analitica_pass` | Corrige `ANALITICA_DB_PASSWORD` en `.env` (sin espacios al final). Si no la recuerdas, vuelve a ejecutar `esquema_analitica.sql` con una nueva |
 | `Connection refused` / "No me pude conectar a la base" | Docker o el contenedor de Postgres está apagado | Inicia Docker y el contenedor (`docker start <nombre>`) |
 | `permission denied for table ...` | Una tabla/vista nueva de andina_lab sin permisos | Vuelve a ejecutar `esquema_analitica.sql` |
+| `Todavía no existe analitica.vw_...` en el dashboard | La vista no se ha creado en Postgres o no se ha subido a BigQuery | Ejecuta `esquema_analitica.sql` (con la misma clave del `.env`, ver 8.4) y `python -m analitica.subir_bigquery` |
 | `relation "public.vw_..." does not exist` | Falta ejecutar un `.sql` de andina_lab | Ejecuta en andina_lab `vw_kpis.sql`, `vw_reviews.sql`, `vw_scorecard.sql`, `controles_calidad.sql` (en ese orden) |
 | `ModuleNotFoundError: No module named 'analitica'` | No estás en la carpeta del proyecto o falta activar el entorno | `cd ~/andina_analytics && source .venv/bin/activate` |
 | `streamlit: command not found` | Entorno no activado | `source .venv/bin/activate` |
