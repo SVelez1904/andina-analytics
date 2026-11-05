@@ -18,7 +18,8 @@ if not c.conexion_ok() or not c.requiere("analitica.vw_finanzas_reservas",
     st.stop()
 
 # Toda la vista se lee una vez (es chica) y el mes se filtra en pandas: cambiar de mes no consulta BigQuery
-todo = c.leer("""SELECT mes, considerada, id_reserva, numero_registro, propiedad, mercado, canal, status_reserva,
+# id_reserva llega seudonimizado (analitica/subir_bigquery.py): sirve para contar, no para buscar en Stays
+todo = c.leer("""SELECT mes, considerada, id_reserva, propiedad, mercado, canal, status_reserva,
                         fecha_reserva, llegada, salida, fecha_cancelacion, noches_reserva, noches_mes, moneda,
                         total_reserva, limpieza, ingreso_alojamiento, comision, ingreso_mes_original,
                         ingreso_mes_clp, noches_sin_tipo_cambio
@@ -122,12 +123,11 @@ c.ver_tabla(prop.rename(columns={"propiedad": "Propiedad", "mercado": "Mercado",
 st.subheader("Reserva por reserva")
 st.caption("Cada fila suma su \"Ingreso CLP\" al total. Los montos de la reserva están completos (todas sus noches); "
            "\"Alojamiento del mes\" es la parte que corresponde a las noches de este mes.")
-detalle = fin[["propiedad", "mercado", "canal", "numero_registro", "fecha_reserva", "llegada", "salida",
+detalle = fin[["propiedad", "mercado", "canal", "fecha_reserva", "llegada", "salida",
                "noches_reserva", "noches_mes", "moneda", "total_reserva", "limpieza", "ingreso_alojamiento",
                "ingreso_mes_original", "tipo_cambio", "ingreso_mes_clp", "comision"]]
 st.dataframe(detalle, hide_index=True, width="stretch",
              column_config={"propiedad": "Propiedad", "mercado": "Mercado", "canal": "Canal",
-                            "numero_registro": "N° reserva",
                             "fecha_reserva": st.column_config.DateColumn("Reservada", format="DD-MM-YYYY"),
                             "llegada": st.column_config.DateColumn("Llegada", format="DD-MM-YYYY"),
                             "salida": st.column_config.DateColumn("Salida", format="DD-MM-YYYY"),
@@ -142,10 +142,10 @@ st.download_button("Descargar CSV", detalle.to_csv(index=False).encode("utf-8-si
 
 if not canceladas.empty:
     st.markdown(f"**Canceladas, no suman** ({canceladas['id_reserva'].nunique()} con noches en este mes)")
-    st.dataframe(canceladas[["propiedad", "canal", "numero_registro", "llegada", "salida", "noches_mes",
+    st.dataframe(canceladas[["propiedad", "canal", "llegada", "salida", "noches_mes",
                              "moneda", "total_reserva", "status_reserva", "fecha_cancelacion"]],
                  hide_index=True, width="stretch",
-                 column_config={"propiedad": "Propiedad", "canal": "Canal", "numero_registro": "N° reserva",
+                 column_config={"propiedad": "Propiedad", "canal": "Canal",
                                 "llegada": st.column_config.DateColumn("Llegada", format="DD-MM-YYYY"),
                                 "salida": st.column_config.DateColumn("Salida", format="DD-MM-YYYY"),
                                 "noches_mes": "Noches en el mes", "moneda": "Moneda",

@@ -4,6 +4,7 @@ from types import SimpleNamespace as NS
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from analitica import pronostico, reporte, reviews_ia
 
@@ -158,3 +159,112 @@ def test_objetos_sin_datos_personales():
 
     todos = {t for tablas in subir_bigquery.OBJETOS.values() for t in tablas}
     assert not todos & {"dim_hospedes", "vw_reservas_analisis", "auth_user", "django_session"}
+
+
+# -- Dashboard: piezas de app/comun.py -------------------------------------------------------------
+
+@pytest.fixture
+def comun(monkeypatch):
+    monkeypatch.syspath_prepend("app")
+    import comun
+    return comun
+
+
+def _noches(mes, mercado="Chile", moneda="CLP", **kw):
+    fila = dict(mes=pd.Timestamp(mes), mercado=mercado, moneda_local=moneda, noches_vendidas=0, noches_disponibles=30,
+                noches_futuras_vendidas=0, noches_pasadas=30, ingreso_alojamiento=0.0, ingreso_futuro=0.0)
+    return fila | kw
+
+
+def test_resumen_mes_separa_a_la_fecha_del_mes_completo(comun):
+    kp = pd.DataFrame([
+        _noches("2026-11-01", "Brasil", "BRL", noches_pasadas=4),
+        _noches("2026-11-01", noches_vendidas=10, noches_futuras_vendidas=7, noches_pasadas=4,
+                ingreso_alojamiento=1000.0, ingreso_futuro=700.0),
+        _noches("2026-11-01", noches_vendidas=5, noches_futuras_vendidas=3, noches_pasadas=4,
+                ingreso_alojamiento=500.0, ingreso_futuro=300.0),
+        _noches("2026-10-01", noches_vendidas=99),
+    ])
+    chile, brasil = (r for _, r in comun.resumen_mes(kp, pd.Timestamp("2026-11-01")).iterrows())
+    assert chile["mercado"] == "Chile" and brasil["mercado"] == "Brasil"
+    assert chile["vendidas_fecha"] == 5
+    assert chile["ocupacion_fecha"] == pytest.approx(5 / 8)
+    assert chile["adr_fecha"] == pytest.approx(100)
+    assert chile["revpar_fecha"] == pytest.approx(500 / 8)
+    assert chile["ocupacion_mes"] == pytest.approx(15 / 60)
+    assert brasil["ocupacion_fecha"] == 0 and pd.isna(brasil["adr_fecha"])    # sin ventas: sin ADR, no error
+
+
+def test_resumen_mes_primer_dia_y_mes_cerrado(comun):
+    primer_dia = pd.DataFrame([_noches("2026-11-01", noches_vendidas=9, noches_futuras_vendidas=9, noches_pasadas=0,
+                                       ingreso_alojamiento=900.0, ingreso_futuro=900.0)])
+    r = comun.resumen_mes(primer_dia, pd.Timestamp("2026-11-01")).iloc[0]
+    assert pd.isna(r["ocupacion_fecha"]) and r["ocupacion_mes"] == pytest.approx(9 / 30)
+
+    cerrado = pd.DataFrame([_noches("2026-10-01", noches_vendidas=15, ingreso_alojamiento=1500.0)])
+    r = comun.resumen_mes(cerrado, pd.Timestamp("2026-10-01")).iloc[0]
+    assert r["ocupacion_fecha"] == r["ocupacion_mes"] == pytest.approx(0.5)
+
+
+def _reservas(comun, hoy):
+    """Una reserva por situación posible, con la misma lógica de terminada/pendiente de reservas_reviews()."""
+    hoy = pd.Timestamp(hoy)
+    d = lambda n: hoy + pd.Timedelta(days=n)  # noqa: E731
+    df = pd.DataFrame([
+        ("A", "con", d(-20), d(-15), True, 5.0),
+        ("A", "abierta", d(-10), d(-3), False, None),
+        ("A", "justo", d(-20), d(-14), False, None),
+        ("B", "vencida", d(-20), d(-15), False, None),
+        ("B", "encurso", d(-1), d(2), False, None),
+        ("C", "futura", d(3), d(6), False, None),
+        ("D", "sale_hoy", d(-3), d(0), False, None),
+    ], columns=["propiedad", "id_reserva", "llegada", "salida", "con_review", "nota"])
+    df["terminada"] = df["salida"] <= hoy
+    df["pendiente"] = df["terminada"] & ~df["con_review"] & ((hoy - df["salida"]).dt.days <= comun.DIAS_PARA_REVIEW)
+    df["situacion"] = comun.situacion_reserva(df, hoy)
+    return df
+
+
+def test_situacion_de_cada_reserva(comun):
+    s = _reservas(comun, "2026-11-20").set_index("id_reserva")["situacion"]
+    assert s["con"] == comun.CON_REVIEW
+    assert s["abierta"] == s["justo"] == s["sale_hoy"] == comun.PUEDE_DEJARLA     # el día 14 todavía se puede
+    assert s["vencida"] == comun.PLAZO_VENCIDO
+    assert s["encurso"] == comun.EN_CURSO
+    assert s["futura"] == comun.POR_LLEGAR
+
+
+def test_reviews_por_departamento(comun):
+    con, sin = comun.reviews_por_departamento(_reservas(comun, "2026-11-20"))
+    assert con["propiedad"].tolist() == ["A"]
+    a = con.iloc[0]
+    assert (a["con_review"], a["terminadas"], a["pendientes"], a["vencidas"]) == (1, 3, 2, 0)
+    assert sin["propiedad"].tolist() == ["D", "B", "C"]      # primero donde todavía se puede conseguir
+    b = sin.set_index("propiedad").loc["B"]
+    assert (b["vencidas"], b["por_terminar"], b["pendientes"]) == (1, 1, 0)
+    assert sin.set_index("propiedad").loc["C", "por_terminar"] == 1
+
+
+def _reviews_mes(*notas):
+    """Una fila por review, como si cada una fuera de un anuncio distinto."""
+    return pd.DataFrame({"reviews_con_nota": 1, "suma_general": notas, "nota_minima": notas,
+                         "reviews_bajo_5": [int(n < 5) for n in notas]})
+
+
+@pytest.mark.parametrize("notas, veredicto", [
+    ((5,) * 9 + (4,), "🟢"),         # 4,90 justo
+    ((5, 5, 5, 5, 4), "🟠"),         # 4,80 justo
+    ((5, 5, 4, 4, 5, 4), "🔴"),      # bajo 4,80
+    ((5,) * 30 + (3,), "🔴"),        # promedio alto, pero una review de 3 siempre es mal mes
+    ((5, 4), "⚪"),                  # muy pocas para evaluar
+    ((3,), "🔴"),                    # aunque sea una sola, una review de 3 se avisa
+])
+def test_evaluar_reviews_veredicto(comun, notas, veredicto):
+    assert comun.evaluar_reviews(_reviews_mes(*notas))["veredicto"].startswith(veredicto)
+
+
+def test_evaluar_reviews_totales_y_mes_vacio(comun):
+    r = comun.evaluar_reviews(_reviews_mes(5, 5, 4))
+    assert (r["reviews"], r["cinco"], r["minima"]) == (3, 2, 4) and r["nota"] == pytest.approx(14 / 3)
+    vacio = comun.evaluar_reviews(_reviews_mes(5).iloc[0:0])
+    assert vacio["reviews"] == 0 and vacio["nota"] is None and vacio["veredicto"].startswith("⚪")

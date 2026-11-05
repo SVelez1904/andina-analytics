@@ -8,7 +8,6 @@ if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -19,67 +18,10 @@ c.configurar("Ocupación y pronóstico")
 if not c.conexion_ok() or not c.requiere("public.vw_fct_noches", c.COMO_ACTUALIZAR):
     st.stop()
 
-# Ocupación del MES COMPLETO ("on the books"): cuenta las noches ya ocurridas y las futuras que ya
-# están reservadas, sobre todas las noches del mes. El mes en curso y los futuros todavía pueden subir.
-# SQL en dialecto BigQuery. "hoy" se toma en hora de Chile.
-SQL_MES_COMPLETO = """
-WITH params AS (
-    SELECT @hoy AS hoy                   -- hoy en Chile, desde Python (c.hoy())
-),
-vendidas AS (                            -- una fila por propiedad y noche vendida (sin duplicar solapes)
-    SELECT id_propriedade, fecha,
-           SUM(ingreso_noche_local) AS ingreso_local, SUM(ingreso_noche_clp) AS ingreso_clp
-    FROM public.vw_fct_noches WHERE vendida
-    GROUP BY id_propriedade, fecha
-),
-props AS (
-    SELECT n.id_propriedade, MIN(n.fecha) AS alta, MIN(n.moneda_local) AS moneda_local, pf.fecha_baja
-    FROM public.vw_fct_noches n
-    LEFT JOIN public.propiedad_fechas pf ON pf.id_propriedade = n.id_propriedade
-    GROUP BY n.id_propriedade, pf.fecha_baja
-),
-horizonte AS (                           -- hasta fin del mes de la última noche vendida (mín. 60 días)
-    SELECT LAST_DAY(GREATEST(COALESCE(MAX(v.fecha), ANY_VALUE(p.hoy)),
-                             DATE_ADD(ANY_VALUE(p.hoy), INTERVAL 60 DAY)), MONTH) AS fin
-    FROM params p LEFT JOIN vendidas v ON TRUE
-),
-calendario AS (                          -- todas las noches, de alta a baja
-    SELECT p.id_propriedade, p.moneda_local, fecha,
-           DATE_TRUNC(fecha, MONTH) AS mes,
-           CASE WHEN DATE_TRUNC(fecha, MONTH) < DATE_TRUNC(k.hoy, MONTH) THEN 'cerrado'
-                WHEN DATE_TRUNC(fecha, MONTH) = DATE_TRUNC(k.hoy, MONTH) THEN 'en curso'
-                ELSE 'futuro' END AS estado_mes,
-           fecha >= k.hoy AS es_futura
-    FROM props p
-    CROSS JOIN horizonte h
-    CROSS JOIN params k
-    CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(
-        p.alta,
-        LEAST(COALESCE(DATE_SUB(p.fecha_baja, INTERVAL 1 DAY), h.fin), h.fin)
-    )) AS fecha
-)
-SELECT pr.nome_anuncio                                                  AS propiedad,
-       CASE c.moneda_local WHEN 'BRL' THEN 'Brasil' ELSE 'Chile' END    AS mercado,
-       c.moneda_local                                                   AS moneda_local,
-       c.mes                                                            AS mes,
-       c.estado_mes                                                     AS estado_mes,
-       COUNT(*)                                                         AS noches_disponibles,
-       COUNT(v.fecha)                                                   AS noches_vendidas,
-       COUNTIF(v.fecha IS NOT NULL AND c.es_futura)                     AS noches_futuras_vendidas,
-       COUNTIF(NOT c.es_futura)                                         AS noches_pasadas,
-       COALESCE(SUM(v.ingreso_local), 0)                                AS ingreso_alojamiento,
-       COALESCE(SUM(v.ingreso_clp), 0)                                  AS ingreso_alojamiento_clp
-FROM calendario c
-JOIN public.dim_propiedades pr ON pr.id_interno = c.id_propriedade
-LEFT JOIN vendidas v ON v.id_propriedade = c.id_propriedade AND v.fecha = c.fecha
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY mes
-"""
-kp = c.leer(SQL_MES_COMPLETO, {"hoy": c.hoy()})
+kp = c.mes_completo()
 if kp.empty:
     st.info("Aún no hay datos de ocupación.")
     st.stop()
-kp["mes"] = pd.to_datetime(kp["mes"])
 todos = sorted(kp["propiedad"].dropna().unique())
 colores = c.colores_por_nombre(todos)
 hoy_mes = pd.Timestamp.today().normalize().replace(day=1)
@@ -242,56 +184,6 @@ c.ver_tabla(pa[["propiedad", "mercado", "ocupacion", "adr", "revpar", "vendidas"
                            "revpar": st.column_config.NumberColumn("RevPAR (moneda local)", format="%.0f"),
                            "ingreso": st.column_config.NumberColumn("Ingreso (moneda local)", format="%.0f"),
                            "ingreso_clp": st.column_config.NumberColumn("Ingreso CLP", format="%.0f")})
-
-# -- 3. Evolución mensual ---------------------------------------------------------------------------------
-st.subheader("Evolución mensual")
-metrica = st.radio("Indicador", ["Ocupación", "ADR", "RevPAR"], horizontal=True, label_visibility="collapsed")
-col = {"Ocupación": "ocupacion", "ADR": "adr", "RevPAR": "revpar"}[metrica]
-por_anuncio = st.toggle("Separar por anuncio", value=len(anuncios) <= 4,
-                        help="Con más de 4 anuncios se muestra un gráfico pequeño por anuncio.")
-if por_anuncio:
-    ev = agregar(f, ["propiedad", "mercado", "moneda_local", "mes"])
-    if len(anuncios) <= 4:
-        fig = px.line(ev, x="mes", y=col, color="propiedad", markers=True, color_discrete_map=colores,
-                      labels={"propiedad": "Anuncio"})
-        fig.update_traces(line_width=2.5, marker_size=9)
-        alto = 380
-    else:
-        fig = px.line(ev, x="mes", y=col, color="propiedad", facet_col="propiedad", facet_col_wrap=5,
-                      markers=True, color_discrete_map=colores)
-        fig.update_traces(line_width=2.5, marker_size=7)
-        fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-        fig.update_yaxes(showticklabels=True)
-        alto = 60 + 190 * -(-len(anuncios) // 5)
-    fig.update_traces(hovertemplate="%{x|%b %Y}: " + ("%{y:.0%}" if col == "ocupacion" else "%{y:,.0f}") + "<extra></extra>")
-    fig.update_xaxes(dtick="M1", tickformat="%b %Y")
-    st.plotly_chart(c.estilo_figura(fig, alto=alto, y_pct=col == "ocupacion", leyenda=len(anuncios) <= 4)
-                    .update_layout(hovermode="closest"), width="stretch")
-    if col != "ocupacion":
-        st.caption("ADR y RevPAR en la moneda de cada anuncio (CLP o BRL).")
-else:
-    ev = agregar(f, ["mercado", "moneda_local", "mes"])
-    if col == "ocupacion":
-        fig = px.line(ev, x="mes", y=col, color="mercado", markers=True, color_discrete_map=c.COLOR_MERCADO,
-                      category_orders={"mercado": c.ORDEN_MERCADOS}, labels={"mercado": "Mercado"})
-        fig.update_traces(line_width=2.5, marker_size=9, hovertemplate="%{y:.0%}")
-        fig.update_xaxes(dtick="M1", tickformat="%b %Y")
-        st.plotly_chart(c.estilo_figura(fig, y_pct=True, leyenda=ev["mercado"].nunique() > 1), width="stretch")
-    else:
-        # En moneda local: un gráfico por mercado (nunca dos escalas en un mismo eje)
-        mercados = list(c.chile_primero(ev, ["mercado"])["mercado"].unique())
-        for colu, mercado in zip(st.columns(len(mercados)), mercados):
-            g = ev[ev["mercado"] == mercado]
-            mon = g["moneda_local"].iloc[0]
-            fig = px.line(g, x="mes", y=col, markers=True, title=f"{mercado} ({mon})",
-                          color_discrete_sequence=[c.COLOR_MERCADO.get(mercado, c.AZUL)])
-            fig.update_traces(line_width=2.5, marker_size=9, hovertemplate="%{y:,.0f} " + mon)
-            fig.update_xaxes(dtick="M1", tickformat="%b %Y")
-            colu.plotly_chart(c.estilo_figura(fig, alto=320, leyenda=False), width="stretch")
-c.ver_tabla(ev.assign(mes=ev["mes"].dt.strftime("%Y-%m")),
-            column_config={"ocupacion": st.column_config.NumberColumn("Ocupación", format="percent"),
-                           "adr": st.column_config.NumberColumn("ADR", format="%.0f"),
-                           "revpar": st.column_config.NumberColumn("RevPAR", format="%.0f")})
 
 # -- 3b. Anticipación de las reservas --------------------------------------------------------------------------
 st.subheader("Con cuánta anticipación reservan")

@@ -1,4 +1,4 @@
-"""Reviews: estado por propiedad, evolución, categorías y temas (IA)."""
+"""Reviews: estado por propiedad, quién dejó review, categorías, temas (IA) y evolución."""
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -34,6 +34,78 @@ st.dataframe(
                    "reviews_acumuladas": "N° reviews", "promedio_3m": st.column_config.NumberColumn("3 meses", format="%.2f"),
                    "reviews_3m": "N° 3 meses", "reviews_mes": "Este mes", "peor_categoria_3m": "Peor categoría 3m",
                    "peor_nota_3m": st.column_config.NumberColumn("Nota", format="%.2f"), "motivo": "Motivo"})
+
+# -- Reviews por departamento ------------------------------------------------------------------------------
+st.subheader("Qué departamentos tienen review")
+
+
+def por_departamento():
+    if not c.requiere("analitica.vw_reservas_reviews", "Ejecuta de nuevo `sql/esquema_analitica.sql` y luego "
+                                                       "`python -m analitica.subir_bigquery` en tu computador."):
+        return
+    rr, rev_desde = c.reservas_reviews()
+    if rr.empty:
+        st.info("Aún no hay reviews enlazadas a reservas.")
+        return
+    hoy_mes = pd.Timestamp(c.hoy()).replace(day=1)
+    meses_rr = sorted((m for m in map(pd.Timestamp, rr["mes_salida"].unique()) if m <= hoy_mes), reverse=True)
+    if not meses_rr:
+        st.info("Aún no hay reservas con salida este mes.")
+        return
+    mes = st.selectbox("Mes de salida", meses_rr, key="mes_departamentos",
+                       format_func=lambda m: c.nombre_mes(m) + (" (en curso)" if m == hoy_mes else ""))
+    del_mes = rr[rr["mes_salida"] == mes]
+    con, sin = c.reviews_por_departamento(del_mes)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Departamentos con reservas", f"{len(con) + len(sin)}")
+    k2.metric("Con al menos una review", f"{len(con)}")
+    k3.metric("Aún sin review", f"{len(sin)}")
+    k4.metric("Estadías que aún pueden dejarla", f"{int(del_mes['pendiente'].sum())}",
+              help=f"De este mes: terminadas hace {c.DIAS_PARA_REVIEW} días o menos y todavía sin review.")
+
+    st.markdown(f"**✅ Dejaron review** ({len(con)})")
+    if con.empty:
+        st.markdown("Ningún departamento tiene reviews de este mes todavía.")
+    else:
+        st.dataframe(con[["propiedad", "con_review", "terminadas", "nota", "pendientes", "vencidas", "por_terminar"]],
+                     hide_index=True, width="stretch",
+                     column_config={"propiedad": st.column_config.TextColumn("Departamento", width="medium"), "con_review": "Reviews",
+                                    "terminadas": "Estadías terminadas",
+                                    "nota": st.column_config.NumberColumn("Nota", format="%.2f"),
+                                    "pendientes": "Aún pueden", "vencidas": "Plazo vencido",
+                                    "por_terminar": "Sin check-out aún"})
+    st.markdown(f"**⏳ Tuvieron reservas, aún sin review** ({len(sin)})")
+    if sin.empty:
+        st.markdown("Todos los departamentos con reservas tienen al menos una review. 🎉")
+    else:
+        st.dataframe(sin[["propiedad", "reservas", "terminadas", "pendientes", "vencidas", "por_terminar"]],
+                     hide_index=True, width="stretch",
+                     column_config={"propiedad": st.column_config.TextColumn("Departamento", width="medium"), "reservas": "Reservas",
+                                    "terminadas": "Estadías terminadas", "pendientes": "Aún pueden",
+                                    "vencidas": "Plazo vencido", "por_terminar": "Sin check-out aún"})
+    st.caption(f"Reservas no canceladas, por mes de **salida** (no calza con \"Este mes\" de Estado actual, que cuenta "
+               f"por fecha de la review). **Aún pueden**: terminaron hace {c.DIAS_PARA_REVIEW} días o menos. "
+               "**Plazo vencido**: pasó esa ventana sin review. Las reservas se reconocen por sus fechas: "
+               "el código va seudonimizado.")
+
+    columnas = {"propiedad": "Departamento",
+                "llegada": st.column_config.DateColumn("Llegada", format="DD-MM-YYYY"),
+                "salida": st.column_config.DateColumn("Salida", format="DD-MM-YYYY"), "situacion": "Situación",
+                "dias_restantes": st.column_config.NumberColumn("Días para dejarla", format="%.0f"),
+                "fecha_review": st.column_config.DateColumn("Fecha review", format="DD-MM-YYYY"),
+                "nota": st.column_config.NumberColumn("Nota", format="%.2f")}
+    c.ver_tabla(del_mes.sort_values(["propiedad", "salida"])[list(columnas)], "Ver reserva por reserva",
+                column_config=columnas)
+    # Una estadía de fines del mes pasado sigue abierta este mes: esta lista no depende del selector
+    abiertas = rr[rr["pendiente"]].sort_values("dias_restantes")
+    if not abiertas.empty:
+        c.ver_tabla(abiertas[["propiedad", "llegada", "salida", "dias_restantes"]],
+                    f"Ver las {len(abiertas)} estadías que hoy aún pueden dejar review (de cualquier mes)",
+                    column_config=columnas)
+
+
+por_departamento()
 
 # -- Categorías (últimos 3 meses) -------------------------------------------------------------------------
 st.subheader("Notas por categoría · últimos 3 meses")

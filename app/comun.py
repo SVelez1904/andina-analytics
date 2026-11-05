@@ -10,6 +10,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
@@ -148,7 +149,97 @@ def requiere(objeto, como_crearlo):
     return True
 
 
+# Ocupación del MES COMPLETO ("on the books"): cuenta las noches ya ocurridas y las futuras que ya
+# están reservadas, sobre todas las noches del mes. El mes en curso y los futuros todavía pueden subir.
+# SQL en dialecto BigQuery. "hoy" se toma en hora de Chile.
+SQL_MES_COMPLETO = """
+WITH params AS (
+    SELECT @hoy AS hoy                   -- hoy en Chile, desde Python (c.hoy())
+),
+vendidas AS (                            -- una fila por propiedad y noche vendida (sin duplicar solapes)
+    SELECT id_propriedade, fecha,
+           SUM(ingreso_noche_local) AS ingreso_local, SUM(ingreso_noche_clp) AS ingreso_clp
+    FROM public.vw_fct_noches WHERE vendida
+    GROUP BY id_propriedade, fecha
+),
+props AS (
+    SELECT n.id_propriedade, MIN(n.fecha) AS alta, MIN(n.moneda_local) AS moneda_local, pf.fecha_baja
+    FROM public.vw_fct_noches n
+    LEFT JOIN public.propiedad_fechas pf ON pf.id_propriedade = n.id_propriedade
+    GROUP BY n.id_propriedade, pf.fecha_baja
+),
+horizonte AS (                           -- hasta fin del mes de la última noche vendida (mín. 60 días)
+    SELECT LAST_DAY(GREATEST(COALESCE(MAX(v.fecha), ANY_VALUE(p.hoy)),
+                             DATE_ADD(ANY_VALUE(p.hoy), INTERVAL 60 DAY)), MONTH) AS fin
+    FROM params p LEFT JOIN vendidas v ON TRUE
+),
+calendario AS (                          -- todas las noches, de alta a baja
+    SELECT p.id_propriedade, p.moneda_local, fecha,
+           DATE_TRUNC(fecha, MONTH) AS mes,
+           CASE WHEN DATE_TRUNC(fecha, MONTH) < DATE_TRUNC(k.hoy, MONTH) THEN 'cerrado'
+                WHEN DATE_TRUNC(fecha, MONTH) = DATE_TRUNC(k.hoy, MONTH) THEN 'en curso'
+                ELSE 'futuro' END AS estado_mes,
+           fecha >= k.hoy AS es_futura
+    FROM props p
+    CROSS JOIN horizonte h
+    CROSS JOIN params k
+    CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(
+        p.alta,
+        LEAST(COALESCE(DATE_SUB(p.fecha_baja, INTERVAL 1 DAY), h.fin), h.fin)
+    )) AS fecha
+)
+SELECT pr.nome_anuncio                                                  AS propiedad,
+       CASE c.moneda_local WHEN 'BRL' THEN 'Brasil' ELSE 'Chile' END    AS mercado,
+       c.moneda_local                                                   AS moneda_local,
+       c.mes                                                            AS mes,
+       c.estado_mes                                                     AS estado_mes,
+       COUNT(*)                                                         AS noches_disponibles,
+       COUNT(v.fecha)                                                   AS noches_vendidas,
+       COUNTIF(v.fecha IS NOT NULL AND c.es_futura)                     AS noches_futuras_vendidas,
+       COUNTIF(NOT c.es_futura)                                         AS noches_pasadas,
+       COALESCE(SUM(v.ingreso_local), 0)                                AS ingreso_alojamiento,
+       COALESCE(SUM(v.ingreso_clp), 0)                                  AS ingreso_alojamiento_clp,
+       COALESCE(SUM(IF(c.es_futura, v.ingreso_local, 0)), 0)            AS ingreso_futuro,
+       COALESCE(SUM(IF(c.es_futura, v.ingreso_clp, 0)), 0)              AS ingreso_futuro_clp
+FROM calendario c
+JOIN public.dim_propiedades pr ON pr.id_interno = c.id_propriedade
+LEFT JOIN vendidas v ON v.id_propriedade = c.id_propriedade AND v.fecha = c.fecha
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY mes
+"""
+
+
+def mes_completo():
+    """Una fila por propiedad y mes (ver SQL_MES_COMPLETO), con `mes` como fecha de pandas."""
+    kp = leer(SQL_MES_COMPLETO, {"hoy": hoy()})
+    kp["mes"] = pd.to_datetime(kp["mes"])
+    return kp
+
+
+def resumen_mes(kp, mes):
+    """Una fila por mercado para `mes`, con dos lecturas de ese mes:
+    - a la fecha (`*_fecha`): solo las noches que ya ocurrieron. Se puede comparar con un mes cerrado.
+    - mes completo: suma las noches futuras ya reservadas, sobre todas las noches del mes.
+    En un mes cerrado no hay noches futuras, así que ambas lecturas dan lo mismo."""
+    g = kp[kp["mes"] == mes].groupby(["mercado", "moneda_local"], as_index=False).agg(
+        vendidas=("noches_vendidas", "sum"), disponibles=("noches_disponibles", "sum"),
+        futuras=("noches_futuras_vendidas", "sum"), pasadas=("noches_pasadas", "sum"),
+        ingreso=("ingreso_alojamiento", "sum"), ingreso_futuro=("ingreso_futuro", "sum"))
+    vendidas_fecha = g["vendidas"] - g["futuras"]
+    ingreso_fecha = g["ingreso"] - g["ingreso_futuro"]
+    pasadas = g["pasadas"].where(g["pasadas"] > 0)      # el día 1 aún no ocurre ninguna noche del mes
+    g["vendidas_fecha"] = vendidas_fecha
+    g["ocupacion_fecha"] = vendidas_fecha / pasadas
+    g["adr_fecha"] = ingreso_fecha / vendidas_fecha.where(vendidas_fecha > 0)
+    g["revpar_fecha"] = ingreso_fecha / pasadas
+    g["ocupacion_mes"] = g["vendidas"] / g["disponibles"].where(g["disponibles"] > 0)
+    return chile_primero(g, ["mercado"])
+
+
 DIAS_PARA_REVIEW = 14   # Airbnb da 14 días desde el check-out para dejar la review
+# Situación de cada reserva respecto a su review. Siempre con ícono y texto, nunca solo color.
+CON_REVIEW, PUEDE_DEJARLA, PLAZO_VENCIDO = "✅ Con review", "⏳ Aún puede dejarla", "⌛ Plazo vencido, sin review"
+EN_CURSO, POR_LLEGAR = "🛏️ Estadía en curso", "📅 Por llegar"
 
 
 def reservas_reviews():
@@ -165,7 +256,16 @@ def reservas_reviews():
     hoy_ = pd.Timestamp(hoy())
     df["terminada"] = df["salida"] <= hoy_
     df["pendiente"] = df["terminada"] & ~df["con_review"] & ((hoy_ - df["salida"]).dt.days <= DIAS_PARA_REVIEW)
+    df["situacion"] = situacion_reserva(df, hoy_)
+    df["dias_restantes"] = (DIAS_PARA_REVIEW - (hoy_ - df["salida"]).dt.days).where(df["pendiente"])
     return df, desde
+
+
+def situacion_reserva(df, hoy_):
+    """En qué está cada reserva respecto a su review (necesita con_review, pendiente, llegada y salida)."""
+    return pd.Series(np.select(
+        [df["con_review"], df["pendiente"], df["salida"] <= hoy_, df["llegada"] <= hoy_],
+        [CON_REVIEW, PUEDE_DEJARLA, PLAZO_VENCIDO, EN_CURSO], default=POR_LLEGAR), index=df.index)
 
 
 def resumen_reviews(df, por):
@@ -178,6 +278,42 @@ def resumen_reviews(df, por):
                                             nota=("nota", "mean"))
     g["tasa"] = g["con_review"] / g["terminadas"].where(g["terminadas"] > 0)
     return g
+
+
+def reviews_por_departamento(df):
+    """Una fila por departamento con reservas en `df` (resumen_reviews más vencidas y por_terminar).
+    Devuelve (con review, aún sin review): un departamento va al primero con una sola review,
+    aunque le falten otras (ver columnas pendientes y vencidas)."""
+    g = resumen_reviews(df, ["propiedad"]).merge(
+        df.assign(vencida=df["situacion"].eq(PLAZO_VENCIDO), por_terminar=~df["terminada"])
+          .groupby("propiedad", as_index=False)[["vencida", "por_terminar"]].sum()
+          .rename(columns={"vencida": "vencidas"}), on="propiedad")
+    con = g[g["con_review"] > 0].sort_values(["tasa", "con_review"], ascending=False)
+    sin = g[g["con_review"] == 0].sort_values(["pendientes", "terminadas"], ascending=False)
+    return con.reset_index(drop=True), sin.reset_index(drop=True)
+
+
+MIN_REVIEWS_EVALUAR = 3   # con menos, una sola review decide el mes (mismo mínimo que "Sin datos suficientes")
+
+
+def evaluar_reviews(df):
+    """Evalúa las reviews recibidas en un mes, de todos los anuncios juntos. `df`: filas de vw_reviews_mensual de ese
+    mes. Usa los umbrales de criticidad: 4,90 y 4,80, y una review de 3 o menos siempre es mal mes."""
+    n = int(df["reviews_con_nota"].sum())
+    nota = float(df["suma_general"].sum()) / n if n else None
+    minima = df["nota_minima"].min() if n else None
+    if n and minima <= 3:
+        veredicto = "🔴 Mes con problemas"
+    elif n < MIN_REVIEWS_EVALUAR:
+        veredicto = "⚪ Aún pocas reviews"
+    elif nota >= 4.9:
+        veredicto = "🟢 Buen mes"
+    elif nota >= 4.8:
+        veredicto = "🟠 Mes regular"
+    else:
+        veredicto = "🔴 Mes con problemas"
+    return {"reviews": n, "nota": nota, "minima": minima, "cinco": n - int(df["reviews_bajo_5"].sum()),
+            "veredicto": veredicto}
 
 
 def nombre_mes(d, largo=False):

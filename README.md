@@ -463,7 +463,7 @@ solo muestra y descarga; los reportes se generan en tu computador y se suben con
 | Página | Qué muestra |
 |---|---|
 | **Inicio** | KPI financiero: ingreso del último mes cerrado y del mes en curso vs la meta mensual (% de cumplimiento, barra de avance y cuánto falta); último mes cerrado por mercado (ocupación, ADR, RevPAR con variación vs. mes anterior); reservas y reviews del mes que elijas (por defecto el último cerrado): reservas, estadías terminadas, cuántas dejaron review y %, y cuántas aún pueden dejarla; propiedades en Crítico/Alerta; pronóstico de los próximos meses; noches libres de los próximos 7 días; aviso si hay controles de datos para revisar |
-| **Ocupación** | Ingresos vs meta del período (total, meta × meses, % de cumplimiento y barras por mes con la meta punteada; siempre todo el portafolio, no depende del filtro de anuncios); evolución mensual por mercado; ranking de propiedades por mes; **anticipación de las reservas** por anuncio (barras 100 % por tramos: 0–2, 3–7, 8–14, 15–30, 31–60 y más de 60 días entre que se crea la reserva y la llegada, con la mediana junto al nombre; usa todas las reservas desde `CONFIABLE_DESDE` o, con el interruptor, solo las llegadas del período); **reservas y reviews** del período y anuncios filtrados: reservas por mes vs. con review (con el % sobre las terminadas) y % de review por anuncio; pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
+| **Ocupación** | Ingresos vs meta del período (total, meta × meses, % de cumplimiento y barras por mes con la meta punteada; siempre todo el portafolio, no depende del filtro de anuncios); ranking de propiedades por mes; **anticipación de las reservas** por anuncio (barras 100 % por tramos: 0–2, 3–7, 8–14, 15–30, 31–60 y más de 60 días entre que se crea la reserva y la llegada, con la mediana junto al nombre; usa todas las reservas desde `CONFIABLE_DESDE` o, con el interruptor, solo las llegadas del período); **reservas y reviews** del período y anuncios filtrados: reservas por mes vs. con review (con el % sobre las terminadas) y % de review por anuncio; pronóstico por propiedad (azul oscuro = ya reservado, azul claro = lo que se espera vender); mapa de calor de los próximos 21 días (gris = reservada, azul claro = libre y con poca probabilidad → necesita precio o promoción) |
 | **Reviews** | Estado y criticidad; notas por categoría de los últimos 3 meses; temas de los comentarios (quejas vs. elogios), pendientes con citas y acciones, fortalezas; al final, nota general mes a mes: mapa de calor propiedad × mes con la nota en cada celda (escala 4,5–5: naranjo bajo 4,80, azul desde 4,90) y el detalle de una propiedad con el eje ajustado a sus notas |
 | **Conversión** | Embudo de Airbnb de la última captura: visibilidad (1ª página) → atractivo (búsqueda→anuncio) → cierre (anuncio→reserva), con ✅/⚠️ frente a la referencia y el cuello de botella; tendencia por propiedad; acciones registradas |
 | **Finanzas** | De dónde sale el ingreso del KPI para el mes elegido: total, % de la meta, puente por mercado (total reservas − limpieza = alojamiento × tipo de cambio = CLP; la comisión se muestra pero no se descuenta), ingreso por propiedad, reserva por reserva (noches del mes, montos, tipo de cambio, CSV) y las canceladas que no suman |
@@ -587,8 +587,10 @@ se revisa cada 10 minutos).
 
 ### 8.5 Reservas y reviews: cuántas reservas dejan review
 
-Aparece en **Inicio** (un mes, con selector "Mes analizado") y en **Ocupación** (período y anuncios de la
-barra lateral, por mes y por anuncio).
+Aparece en **Inicio** (un mes, con selector "Mes analizado"; parte en el mes en curso), en **Ocupación**
+(período y anuncios de la barra lateral, por mes y por anuncio) y en **Reviews** ("Qué departamentos tienen
+review": por mes de salida separa los departamentos con review de los que tuvieron reservas y aún no tienen,
+con la situación de cada reserva y las estadías que hoy todavía pueden dejarla).
 
 **De dónde sale.** `analitica.vw_reservas_reviews` (en `sql/esquema_analitica.sql`) toma `public.reservas`
 (sin canceladas, mismo criterio que el KPI de ingresos) y le pega `public.avaliaciones` por `id_reserva`:
@@ -611,6 +613,12 @@ SELECT mes_salida, COUNT(*) AS reservas, COUNT(*) FILTER (WHERE con_review) AS c
 FROM analitica.vw_reservas_reviews
 GROUP BY 1 ORDER BY 1;
 ```
+
+**Inicio** parte por el mes en curso, calculado con `@hoy` (`c.mes_completo()`, la misma consulta de Ocupación):
+ingreso reservado vs meta y, por mercado, las noches ya ocurridas junto con lo reservado del mes completo. Después
+viene "Cómo nos fue con las reviews" (`c.evaluar_reviews()`: evaluación del mes y tabla de todos los anuncios, según la
+fecha de la review). El último mes cerrado queda plegado al final. La página **Guía** (`app/pages/6_Guia.py`) explica cómo leer cada página: si
+cambia una definición o un umbral, actualízala también ahí.
 
 ### 8.6 Caché y consumo de BigQuery
 
