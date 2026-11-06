@@ -27,6 +27,9 @@ DB = {
 # BigQuery: la app de Streamlit lee de aquí (python -m analitica.subir_bigquery copia los datos)
 GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
 BQ_LOCATION = os.environ.get("BQ_LOCATION", "US")
+# Clave para seudonimizar los códigos de reserva antes de subirlos a BigQuery (analitica/privacidad.py).
+# Si la cambias, los seudónimos cambian: vuelve a subir todo con subir_bigquery.
+SEUDONIMO_CLAVE = os.environ.get("SEUDONIMO_CLAVE", "")
 
 ANTHROPIC_API_KEY =os.environ.get("ANTHROPIC_API_KEY", "")
 MODELO_REVIEWS = os.environ.get("CLAUDE_MODELO_REVIEWS", "claude-haiku-4-5-20251001")

@@ -9,7 +9,8 @@ Uso (desde la carpeta andina_analytics):
     python -m analitica.reviews_ia --reclasificar         # todas de nuevo (reemplaza temas)
 
 Qué se envía: nombre del anuncio, notas por categoría, comentario público y comentario privado.
-NO se envía el nombre del huésped, el código de reserva ni ningún dato personal.
+NO se envía el nombre del huésped, el código de reserva ni ningún dato personal: andina_lab ya
+guarda los comentarios anonimizados y aquí se vuelven a limpiar emails, teléfonos y documentos.
 Costo aproximado con Haiku: menos de 1 USD por cada ~500 reviews.
 """
 
@@ -19,6 +20,7 @@ import time
 
 from . import db
 from .config import ANTHROPIC_API_KEY, MODELO_REVIEWS, precio
+from .privacidad import anonimizar
 
 TEMAS = ["limpieza", "ropa_de_cama", "mantenimiento", "equipamiento", "cocina", "bano", "climatizacion",
          "wifi_tv", "privacidad", "ruido", "seguridad", "check_in", "comunicacion", "ubicacion",
@@ -104,7 +106,7 @@ def reviews_pendientes(reclasificar=False, limite=None):
 
 
 def _txt(v):
-    return None if v is None or (isinstance(v, float) and v != v) or str(v).strip() == "" else str(v).strip()
+    return None if v is None or (isinstance(v, float) and v != v) or str(v).strip() == "" else anonimizar(str(v).strip())
 
 
 def armar_mensaje(r):
@@ -151,9 +153,9 @@ def filas_a_guardar(id_avaliacion, temas, modelo):
         filas.append({
             "a": int(id_avaliacion), "tema": t["tema"], "s": t["sentimiento"],
             "sev": sev if sev in (1, 2, 3) else (1 if negativo else None),
-            "cita": (t.get("cita") or "")[:500],
+            "cita": anonimizar((t.get("cita") or "")[:500]),
             "f": t.get("fuente") if t.get("fuente") in ("publico", "privado") else "publico",
-            "acc": (t.get("accion_sugerida") or None) if negativo else None, "m": modelo,
+            "acc": anonimizar(t.get("accion_sugerida") or None) if negativo else None, "m": modelo,
         })
     if not filas:  # elogio general: queda marcada como revisada
         filas.append({"a": int(id_avaliacion), "tema": "otro", "s": "positivo", "sev": None,

@@ -9,6 +9,12 @@ así el SQL del dashboard puede seguir escribiendo `public.tabla`. Cada tabla se
 (refresco completo). Usa el usuario analitica_app del .env, que NO puede leer datos personales
 (dim_hospedes, vw_reservas_analisis, usuarios de Django): eso nunca sale de tu computador.
 
+Antes de subir, sanear() protege lo que queda:
+  - Códigos de reserva -> seudónimo HMAC (SEUDONIMO_CLAVE): los cruces siguen funcionando, pero en
+    BigQuery no se puede volver al código real ni buscar la reserva en Stays/Airbnb.
+  - Se quitan el N° de registro de la reserva y la dirección/coordenadas de las propiedades.
+  - Citas de comentarios privados -> vacías; las demás, sin emails/teléfonos/documentos.
+
 Requiere GCP_PROJECT en el .env y haber corrido una vez `gcloud auth application-default login`.
 """
 import argparse
@@ -24,6 +30,7 @@ import pandas as pd
 
 from . import db
 from .config import BQ_LOCATION, GCP_PROJECT
+from .privacidad import anonimizar, seudonimo
 
 # Lo que lee el dashboard (app/). Si una página nueva consulta otra tabla o vista, agrégala aquí.
 OBJETOS = {
@@ -38,6 +45,26 @@ OBJETOS = {
         "vw_finanzas_reservas", "vw_reservas_reviews", "reportes",
     ],
 }
+
+
+# -- Privacidad: qué se transforma antes de salir del computador ---------------------------------
+
+COLUMNAS_SEUDONIMO = {"id_reserva", "codigo_externo_ota", "codigo_reserva_externo", "id_hospede"}
+COLUMNAS_FUERA = {"numero_registro", "observacao", "direccion", "latitud", "longitud"}
+COLUMNAS_TEXTO_HUESPED = {"cita", "citas", "accion_sugerida", "acciones_sugeridas"}
+
+
+def sanear(df):
+    """Seudonimiza códigos de reserva, quita columnas sensibles y limpia las citas de huéspedes."""
+    df = df.drop(columns=[c for c in df.columns if c in COLUMNAS_FUERA])
+    for col in COLUMNAS_SEUDONIMO & set(df.columns):
+        unicos = {v: seudonimo(v) for v in df[col].dropna().unique()}
+        df[col] = df[col].map(lambda v: unicos.get(v) if v is not None and v == v else None)
+    for col in COLUMNAS_TEXTO_HUESPED & set(df.columns):
+        df[col] = df[col].map(lambda v: [anonimizar(x) for x in v] if isinstance(v, list) else anonimizar(v))
+    if "cita" in df.columns and "fuente" in df.columns:
+        df.loc[df["fuente"] == "privado", "cita"] = None
+    return df
 
 
 # -- Tipos de Postgres -> tipos que BigQuery acepta ----------------------------------------------
@@ -129,7 +156,7 @@ def subir(objetos=None, dry_run=False, imprimir=print):
             imprimir(f"  – {objeto:<40} no existe en Postgres, se omite")
             continue
         try:
-            df = preparar(db.leer(f'SELECT * FROM {schema}."{nombre}"'))
+            df = preparar(sanear(db.leer(f'SELECT * FROM {schema}."{nombre}"')))
             if dry_run:
                 imprimir(f"  · {objeto:<40} {len(df):>7} filas (dry-run)")
                 continue

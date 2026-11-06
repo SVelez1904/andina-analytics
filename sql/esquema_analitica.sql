@@ -9,7 +9,10 @@
 -- Qué hace:
 --   - Crea el usuario analitica_app: LEE el esquema public (tablas y vistas de andina_lab)
 --     y ESCRIBE solo en el esquema analitica. No puede modificar tus datos del negocio.
---   - Le quita acceso a lo sensible: huéspedes, usuarios de Django y la vista con nombres.
+--   - Le quita acceso a lo sensible: huéspedes, reservas (códigos y texto libre), usuarios de
+--     Django y las vistas con comentarios o códigos. Las vistas de análisis sí las lee: corren con
+--     los permisos de su dueño.
+--   - Las citas de comentarios PRIVADOS no salen en las vistas agregadas (van a BigQuery).
 --   - Crea las tablas y vistas de análisis (temas de reviews, pronósticos, reportes).
 -- Es idempotente: se puede volver a ejecutar sin perder datos.
 -- =============================================================================
@@ -32,21 +35,36 @@ END $$;
 -- 2. Lectura del esquema public (lo que mantiene andina_lab) ---------------------------
 GRANT USAGE ON SCHEMA public TO analitica_app;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO analitica_app;      -- incluye las vistas
--- Las vistas que andina_lab vuelva a crear también quedarán legibles:
+-- Las vistas que andina_lab vuelva a crear también quedarán legibles (las crea app_business,
+-- ver andina_lab/sql/roles_postgres.sql; las sensibles se revocan en su propio archivo .sql):
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO analitica_app;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_business') THEN
+        ALTER DEFAULT PRIVILEGES FOR ROLE app_business IN SCHEMA public GRANT SELECT ON TABLES TO analitica_app;
+    END IF;
+END $$;
 
 -- Nada de datos personales ni credenciales
 DO $$
 DECLARE t text;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['dim_hospedes', 'vw_reservas_analisis', 'auth_user', 'auth_user_groups',
-                             'auth_user_user_permissions', 'django_session', 'django_admin_log']
+    FOREACH t IN ARRAY ARRAY['dim_hospedes', 'vw_reservas_analisis', 'reservas', 'vw_reviews_detalle',
+                             'auth_user', 'auth_user_groups', 'auth_user_user_permissions',
+                             'django_session', 'django_admin_log']
     LOOP
         IF to_regclass('public.' || t) IS NOT NULL THEN
             EXECUTE format('REVOKE ALL ON public.%I FROM analitica_app', t);
         END IF;
     END LOOP;
 END $$;
+
+-- Reviews: solo notas y comentarios (ya anonimizados por andina_lab), sin códigos de reserva
+REVOKE ALL ON public.avaliaciones FROM analitica_app;
+GRANT SELECT (id_avaliacion, id_propriedade, fecha, canal, estado,
+              rating_general, rating_limpieza, rating_exactitud, rating_checkin, rating_checkout,
+              rating_comunicacion, rating_ubicacion, rating_valor,
+              comentario_publico, comentario_privado)
+    ON public.avaliaciones TO analitica_app;
 
 -- 3. Esquema propio ---------------------------------------------------------------------
 CREATE SCHEMA IF NOT EXISTS analitica;
@@ -147,7 +165,9 @@ SELECT id_propriedade, propiedad, tema,
        MAX(severidad)                                 AS severidad_maxima,
        MAX(fecha)                                     AS ultima_mencion,
        COUNT(*) FILTER (WHERE fuente = 'privado')     AS en_comentario_privado,
-       (ARRAY_AGG(cita ORDER BY severidad DESC NULLS LAST, fecha DESC))[1:3] AS citas,
+       -- solo citas de comentarios públicos: las privadas se cuentan pero no se muestran
+       (ARRAY_AGG(cita ORDER BY severidad DESC NULLS LAST, fecha DESC)
+            FILTER (WHERE fuente = 'publico'))[1:3]                               AS citas,
        ARRAY_AGG(DISTINCT accion_sugerida) FILTER (WHERE accion_sugerida IS NOT NULL) AS acciones_sugeridas
 FROM analitica.vw_review_temas_detalle
 WHERE sentimiento IN ('negativo', 'neutro') AND tema <> 'externo' AND fecha >= CURRENT_DATE - 90
@@ -155,7 +175,7 @@ GROUP BY id_propriedade, propiedad, tema;
 
 CREATE VIEW analitica.vw_fortalezas_propiedad AS
 SELECT id_propriedade, propiedad, tema, COUNT(*) AS menciones,
-       (ARRAY_AGG(cita ORDER BY fecha DESC))[1:3] AS citas
+       (ARRAY_AGG(cita ORDER BY fecha DESC) FILTER (WHERE fuente = 'publico'))[1:3] AS citas
 FROM analitica.vw_review_temas_detalle
 WHERE sentimiento = 'positivo'
 GROUP BY id_propriedade, propiedad, tema;

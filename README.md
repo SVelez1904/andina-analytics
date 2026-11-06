@@ -724,8 +724,16 @@ GROUP BY fecha_corte ORDER BY fecha_corte;
 
 - **Usuario con permisos mínimos**: `analitica_app` solo lee `public` y escribe en `analitica`.
   No puede modificar reservas, propiedades ni nada de andina_lab.
-- **Sin datos personales**: `analitica_app` no puede leer `dim_hospedes`, `vw_reservas_analisis`
-  ni las tablas de usuarios de Django.
+- **Sin datos personales**: `analitica_app` no puede leer `dim_hospedes`, `reservas`, `vw_reservas_analisis`,
+  `vw_reviews_detalle`, los códigos de reserva de `avaliaciones` ni las tablas de usuarios de Django.
+  Las vistas de análisis sí funcionan: corren con los permisos de su dueño.
+- **Qué llega a BigQuery** (`subir_bigquery.sanear`):
+  - Los códigos de reserva (`id_reserva`, etc.) van **seudonimizados** con HMAC (`SEUDONIMO_CLAVE` del `.env`):
+    sirven para contar y cruzar tablas, pero no para encontrar la reserva en Stays o Airbnb.
+    Si cambias la clave, vuelve a subir todo.
+  - No se suben el N° de registro de la reserva, las observaciones ni la dirección/coordenadas de las propiedades.
+  - Las citas de comentarios **privados** no se suben; las públicas van sin emails, teléfonos ni documentos
+    (andina_lab además quita el nombre del huésped al importar).
 - **A la IA nunca se envían** nombres de huéspedes, códigos de reserva ni datos de contacto.
   A `reviews_ia` le llega: nombre del anuncio, notas y comentarios. Al reporte: cifras agregadas.
   Usa `--dry-run` para verlo tú misma.

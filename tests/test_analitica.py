@@ -161,6 +161,52 @@ def test_objetos_sin_datos_personales():
     assert not todos & {"dim_hospedes", "vw_reservas_analisis", "auth_user", "django_session"}
 
 
+def test_anonimizar_quita_contacto_y_respeta_montos():
+    from analitica.privacidad import anonimizar
+
+    t = anonimizar("Escríbeme a ana@mail.com o al +55 11 98765-4321. RUT 12.345.678-k. Pagamos 150.000 el 2026-10-26.")
+    assert "ana@mail.com" not in t and "98765" not in t and "12.345.678-k" not in t
+    assert "150.000" in t and "2026-10-26" in t
+
+
+def test_seudonimo_estable_y_sin_el_codigo(monkeypatch):
+    from analitica import privacidad
+
+    monkeypatch.setattr(privacidad, "SEUDONIMO_CLAVE", "clave-test")
+    a, b = privacidad.seudonimo("HMABC123"), privacidad.seudonimo("HMABC123")
+    assert a == b and a.startswith("r_") and "ABC123" not in a
+    assert privacidad.seudonimo("HMXYZ999") != a and privacidad.seudonimo(None) is None
+    monkeypatch.setattr(privacidad, "SEUDONIMO_CLAVE", "")
+    with pytest.raises(RuntimeError):
+        privacidad.seudonimo("HMABC123")
+
+
+def test_sanear_para_bigquery(monkeypatch):
+    from analitica import privacidad, subir_bigquery
+
+    monkeypatch.setattr(privacidad, "SEUDONIMO_CLAVE", "clave-test")
+    df = pd.DataFrame({
+        "id_reserva": ["R1", "R1", None], "numero_registro": ["123", "123", "9"],
+        "direccion": ["Calle 1", "Calle 1", "x"], "fuente": ["publico", "privado", "publico"],
+        "cita": ["llamar al 912345678", "secreto", "todo bien"],
+        "citas": [["ok"], None, ["mail a@b.cl"]], "propiedad": ["ENCINA 911"] * 3,
+    })
+    out = subir_bigquery.sanear(df)
+    assert "numero_registro" not in out.columns and "direccion" not in out.columns
+    assert out["id_reserva"].iloc[0] == out["id_reserva"].iloc[1] == privacidad.seudonimo("R1")
+    assert pd.isna(out["id_reserva"].iloc[2])
+    assert out["cita"].iloc[0] == "llamar al [teléfono]" and pd.isna(out["cita"].iloc[1])
+    assert out["citas"].iloc[2] == ["mail [email]"]
+    assert out["propiedad"].iloc[0] == "ENCINA 911"
+
+
+def test_citas_guardadas_sin_datos_de_contacto():
+    filas = reviews_ia.filas_a_guardar(1, [{"tema": "comunicacion", "sentimiento": "negativo", "severidad": 2,
+                                            "cita": "no contestaban al +56 9 8765 4321", "fuente": "publico",
+                                            "accion_sugerida": "Responder rápido"}], "m")
+    assert "8765" not in filas[0]["cita"]
+
+
 # -- Dashboard: piezas de app/comun.py -------------------------------------------------------------
 
 @pytest.fixture
