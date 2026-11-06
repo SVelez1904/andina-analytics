@@ -18,3 +18,10 @@ client_secret*.json
 application_default_credentials.json
 secrets*.txt*
 *.save
+
+# Llaves, credenciales y respaldos
+*.pem
+*.key
+*.dump
+*.sql.gz
+credenciales*.json
