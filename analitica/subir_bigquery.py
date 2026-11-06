@@ -50,7 +50,7 @@ OBJETOS = {
 # -- Privacidad: qué se transforma antes de salir del computador ---------------------------------
 
 COLUMNAS_SEUDONIMO = {"id_reserva", "codigo_externo_ota", "codigo_reserva_externo", "id_hospede"}
-COLUMNAS_FUERA = {"numero_registro", "observacao", "direccion", "latitud", "longitud"}
+COLUMNAS_FUERA = {"numero_registro", "observacao", "direccion", "latitud", "longitud", "tipo_contrato"}
 COLUMNAS_TEXTO_HUESPED = {"cita", "citas", "accion_sugerida", "acciones_sugeridas"}
 
 

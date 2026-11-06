@@ -58,6 +58,19 @@ BEGIN
     END LOOP;
 END $$;
 
+-- Tablas del portal de propietarios (secretos 2FA, IPs, emails, auditoría). El GRANT general
+-- de arriba las incluye: este bloque debe ir siempre después de él.
+DO $$
+DECLARE t text;
+BEGIN
+    FOR t IN SELECT tablename FROM pg_tables
+              WHERE schemaname = 'public'
+                AND tablename LIKE ANY (ARRAY['accounts\_%', 'axes\_%', 'otp\_%'])
+    LOOP
+        EXECUTE format('REVOKE ALL ON public.%I FROM analitica_app', t);
+    END LOOP;
+END $$;
+
 -- Reviews: solo notas y comentarios (ya anonimizados por andina_lab), sin códigos de reserva
 REVOKE ALL ON public.avaliaciones FROM analitica_app;
 GRANT SELECT (id_avaliacion, id_propriedade, fecha, canal, estado,
