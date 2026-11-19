@@ -4,11 +4,13 @@ name: CI
 
 on:
   pull_request:
-    paths: ["finanzas/**", ".github/workflows/**"]
+    paths: ["finanzas/**", ".github/workflows/**", ".gitleaksignore"]
   push:
     branches-ignore: [main]   # main se prueba dentro de deploy.yml
-    paths: ["finanzas/**", ".github/workflows/**"]
+    paths: ["finanzas/**", ".github/workflows/**", ".gitleaksignore"]
   workflow_call:               # deploy.yml y preview.yml reutilizan este workflow
+  workflow_dispatch:           # botón "Run workflow" para correr las pruebas a mano
+  workflow_dispatch:           # botón "Run workflow" para correr las pruebas a mano
 
 permissions:
   contents: read

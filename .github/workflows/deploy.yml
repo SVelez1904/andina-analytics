@@ -5,7 +5,7 @@ name: Deploy
 on:
   push:
     branches: [main]
-    paths: ["finanzas/**", ".github/workflows/**"]
+    paths: ["finanzas/**", ".github/workflows/**", ".gitleaksignore"]
   workflow_dispatch:   # botón "Run workflow" para desplegar a mano
 
 concurrency:

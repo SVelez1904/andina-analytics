@@ -5,7 +5,7 @@ name: Preview
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    paths: ["finanzas/**", ".github/workflows/**"]
+    paths: ["finanzas/**", ".github/workflows/**", ".gitleaksignore"]
 
 concurrency:
   group: preview-${{ github.event.pull_request.number }}
