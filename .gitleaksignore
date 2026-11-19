@@ -1,0 +1,3 @@
+# Revisado el 19-nov-2026: texto de relleno en archivo .example (no es una clave real)
+5dc1db675809cbc536ce5c459d5787a2a1b15af3:.streamlit/secrets.toml.example:private-key:23
+1e2903ba0ff3815bf59784a911e662a6f552e757:.streamlit/secrets.toml.example:private-key:11
