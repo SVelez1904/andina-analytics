@@ -1,0 +1,31 @@
+[project]
+name = "finanzas-str"
+version = "0.2.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+# E/F = errores reales, I = orden de imports, B = bugs comunes, UP = sintaxis moderna, S = seguridad básica
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101", "S608", "E501", "B905"]   # assert en tests · SQL armado con nombres de tabla fijos · líneas largas
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]   # para que las pruebas encuentren lib/ al correr `pytest` directamente
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["lib", "informe"]
+omit = ["lib/bq.py"]   # habla con BigQuery real: se prueba en el job sql-dry-run
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

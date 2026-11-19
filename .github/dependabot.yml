@@ -1,0 +1,16 @@
+# Dependabot (gratis): abre PRs cuando hay versiones nuevas o parches de seguridad.
+# Cada PR pasa por las mismas pruebas de CI antes de que lo aceptes.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /finanzas
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      dependencias:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

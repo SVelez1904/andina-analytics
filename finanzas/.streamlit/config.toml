@@ -1,0 +1,12 @@
+[server]
+headless = true
+# IAP ya protege la app; sin esto la subida de archivos puede fallar detrás del proxy de Google
+enableXsrfProtection = false
+enableCORS = false
+maxUploadSize = 25
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"

@@ -1,0 +1,80 @@
+# Vista previa de cada pull request: publica una versión de prueba SIN tráfico, con su propia URL,
+# conectada al dataset de pruebas `finanzas_dev` (nunca toca los datos reales). Tiene el mismo login (IAP).
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths: ["finanzas/**", ".github/workflows/**"]
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: finanzas
+
+env:
+  REGION: us-central1
+  SERVICIO: finanzas-str
+
+jobs:
+  ci:
+    if: github.event.action != 'closed'
+    uses: ./.github/workflows/ci.yml
+
+  preview:
+    name: Publicar versión de prueba
+    needs: ci
+    if: vars.GCP_WIF_PROVIDER != '' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_DEPLOY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Desplegar revisión sin tráfico
+        id: deploy
+        run: |
+          TAG="pr-${{ github.event.pull_request.number }}"
+          gcloud run deploy "$SERVICIO" \
+            --source . --region "$REGION" \
+            --service-account "finanzas-app@${{ vars.GCP_PROYECTO }}.iam.gserviceaccount.com" \
+            --no-traffic --tag "$TAG" \
+            --set-env-vars "GCP_PROYECTO=${{ vars.GCP_PROYECTO }},BQ_DATASET=finanzas_dev,BUCKET_BOLETAS=${{ vars.GCP_PROYECTO }}-boletas,CLAUDE_MODEL=claude-haiku-5-5" \
+            ${{ vars.USA_API_CLAUDE == 'true' && '--set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest' || '' }} \
+            --quiet
+          URL=$(gcloud run services describe "$SERVICIO" --region "$REGION" --format=json \
+                | python3 -c "import json,sys; t=[x for x in json.load(sys.stdin)['status'].get('traffic',[]) if x.get('tag')=='$TAG']; print(t[0]['url'] if t else '')")
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+      - name: Comentar la URL en el PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none \
+            --body "🔎 Vista previa (datos de prueba \`finanzas_dev\`): ${{ steps.deploy.outputs.url }}"
+
+  limpiar:
+    name: Borrar la vista previa al cerrar el PR
+    if: github.event.action == 'closed' && vars.GCP_WIF_PROVIDER != '' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .   # este job no descarga el código
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_DEPLOY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud run services update-traffic "$SERVICIO" --region "$REGION" --remove-tags "pr-${{ github.event.pull_request.number }}" --quiet || true
